@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zengine</title>
+    <script src="pixi.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<input type="file" id="asset-file-input" accept="image/*,audio/*" multiple style="display:none;">
+
+<!-- ── Menu Bar ── -->
+<div class="menu-bar">
+    <div class="menu-logo">
+        <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:#3A72A5;stroke-width:2;"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/><line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="8.5" x2="22" y2="8.5"/><line x1="2" y1="15.5" x2="22" y2="15.5"/></svg>
+        <span style="font-weight:700;color:#ccd;letter-spacing:.5px;font-size:12px;">ZENGINE</span>
+    </div>
+    <div class="menu-items">
+        <span class="menu-item" id="menu-file">File</span>
+        <span class="menu-item" id="menu-edit">Edit</span>
+        <span class="menu-item" id="menu-assets">Assets</span>
+        <span class="menu-item" id="menu-gameobject">GameObject</span>
+        <span class="menu-item" id="menu-window">Window</span>
+    </div>
+</div>
+
+<!-- ── Toolbar ── -->
+<div class="toolbar">
+    <!-- Left: undo/redo + gizmo tools -->
+    <div class="toolbar-left">
+        <div class="tool-group">
+            <button class="tool-btn" id="btn-undo" title="Undo (Ctrl+Z)">
+                <svg viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M3 13A9 9 0 1 0 6 6.3"/></svg>
+            </button>
+            <button class="tool-btn" id="btn-redo" title="Redo (Ctrl+Y)">
+                <svg viewBox="0 0 24 24"><path d="M21 7v6h-6"/><path d="M21 13A9 9 0 1 1 18 6.3"/></svg>
+            </button>
+        </div>
+        <div class="tool-divider"></div>
+        <div class="tool-group">
+            <button class="tool-btn active" id="btn-tool-translate" title="Move (W)">
+                <svg viewBox="0 0 24 24"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M12 12h.01"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+            </button>
+            <button class="tool-btn" id="btn-tool-rotate" title="Rotate (E)">
+                <svg viewBox="0 0 24 24"><path d="M21.5 2v6h-6"/><path d="M2.5 12A10 10 0 0 1 20.8 7.4"/><path d="M2.5 22v-6h6"/><path d="M21.5 12A10 10 0 0 1 3.2 16.6"/></svg>
+            </button>
+            <button class="tool-btn" id="btn-tool-scale" title="Scale (R)">
+                <svg viewBox="0 0 24 24"><path d="M21 3l-6 6M3 21l6-6M21 3h-5M21 3v5M3 21h5M3 21v-5"/><rect x="8" y="8" width="8" height="8" rx="1"/></svg>
+            </button>
+            <button class="tool-btn" id="btn-tool-all" title="All Gizmos">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="4" r="1.5" fill="currentColor"/><circle cx="12" cy="20" r="1.5" fill="currentColor"/><circle cx="4" cy="12" r="1.5" fill="currentColor"/><circle cx="20" cy="12" r="1.5" fill="currentColor"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="4" y1="12" x2="20" y2="12"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Center: play controls -->
+    <div class="toolbar-center">
+        <button class="play-btn play-btn--play" id="btn-play" title="Play">
+            <svg viewBox="0 0 24 24" style="fill:#4ade80;"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button class="play-btn play-btn--pause" id="btn-pause" title="Pause">
+            <svg viewBox="0 0 24 24" style="fill:#facc15;"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+        </button>
+        <button class="play-btn play-btn--stop" id="btn-stop" title="Stop">
+            <svg viewBox="0 0 24 24" style="fill:#f87171;"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+        </button>
+    </div>
+
+    <!-- Right: scene picker + gizmo mode -->
+    <div class="toolbar-right">
+        <button id="scene-switcher-btn" class="scene-btn">
+            <svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+            <span id="scene-btn-label">Scene 1</span>
+            <svg viewBox="0 0 24 24" style="width:10px;height:10px;fill:currentColor;"><path d="M7 10l5 5 5-5z"/></svg>
+        </button>
+        <div class="tool-divider"></div>
+        <div class="gizmo-mode-wrap">
+            <svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:#888;stroke-width:2;"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            <select id="select-gizmo-mode" class="gizmo-select">
+                <option value="translate">Translate</option>
+                <option value="rotate">Rotate</option>
+                <option value="scale">Scale</option>
+                <option value="all">All</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<!-- ── Workspace ── -->
+<div class="workspace">
+
+    <!-- Hierarchy -->
+    <div id="panel-hierarchy" class="panel panel--hierarchy">
+        <div class="panel-header">
+            <svg viewBox="0 0 24 24" class="panel-header-icon"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+            <span>Hierarchy</span>
+        </div>
+        <div class="hierarchy-search">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <input type="text" placeholder="Search…" id="hierarchy-search-input">
+        </div>
+        <div class="hierarchy-scene-root">
+            <svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:#3A72A5;stroke-width:2;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+            <span id="hierarchy-scene-label" style="color:#7aabcc;font-weight:600;">Scene 1</span>
+        </div>
+        <div id="hierarchy-list" class="hierarchy-list"></div>
+        <div id="resizer-hierarchy" class="resizer resizer--h"></div>
+    </div>
+
+    <!-- Viewport -->
+    <div class="viewport-col">
+        <div class="viewport-tabs">
+            <div class="vtab vtab--active">
+                <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                Scene
+            </div>
+        </div>
+        <div id="pixi-container" class="pixi-container">
+            <div class="axis-widget">
+                <svg viewBox="0 0 80 80">
+                    <line x1="40" y1="40" x2="40" y2="8" stroke="#8FC93A" stroke-width="3"/>
+                    <circle cx="40" cy="8" r="6" fill="#8FC93A"/>
+                    <text x="40" y="12" font-size="9" fill="#fff" font-weight="bold" text-anchor="middle" dominant-baseline="middle">Y</text>
+                    <line x1="40" y1="40" x2="72" y2="40" stroke="#FF4F4B" stroke-width="3"/>
+                    <circle cx="72" cy="40" r="6" fill="#FF4F4B"/>
+                    <text x="72" y="40" font-size="9" fill="#fff" font-weight="bold" text-anchor="middle" dominant-baseline="middle">X</text>
+                    <circle cx="40" cy="40" r="4" fill="#ccc"/>
+                </svg>
+            </div>
+            <div id="drop-hint" class="drop-hint" style="display:none;">
+                <div class="drop-hint-inner">
+                    <svg viewBox="0 0 24 24" style="width:32px;height:32px;fill:none;stroke:#3A72A5;stroke-width:1.5;"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                    Drop Sprite Here
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom panel -->
+        <div id="panel-bottom" class="panel panel--bottom">
+            <div id="resizer-bottom" class="resizer resizer--v"></div>
+            <div class="panel-tabs">
+                <button class="ptab ptab--active" id="tab-assets-btn">
+                    <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                    Assets
+                </button>
+                <button class="ptab" id="tab-prefabs-btn">
+                    <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-4 0v2M12 12v4M10 14h4"/></svg>
+                    Prefabs
+                </button>
+                <button class="ptab" id="tab-console-btn">
+                    <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    Console
+                </button>
+            </div>
+
+            <!-- Assets -->
+            <div id="tab-assets" class="tab-panel tab-panel--active">
+                <div class="assets-sidebar">
+                    <div class="folder-item folder-item--active" id="folder-all">
+                        <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                        All
+                    </div>
+                    <div class="folder-item" id="folder-sprites">
+                        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                        Sprites
+                    </div>
+                    <div class="folder-item" id="folder-audio">
+                        <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                        Audio
+                    </div>
+                </div>
+                <div class="assets-main">
+                    <div class="assets-toolbar">
+                        <button id="btn-import-asset" class="btn-import">
+                            <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+                            Import
+                        </button>
+                    </div>
+                    <div id="asset-grid" class="asset-grid"></div>
+                </div>
+            </div>
+
+            <!-- Console -->
+            <div id="tab-console" class="tab-panel" style="display:none;">
+                <div id="console-output" style="font-family:monospace;font-size:11px;padding:8px;overflow-y:auto;height:100%;color:#888;background:#141414;">
+                    <div style="color:#4ade80;">▶ Zengine ready</div>
+                </div>
+            </div>
+
+            <!-- Prefabs -->
+            <div id="tab-prefabs" class="tab-panel" style="display:none;">
+                <div id="prefab-grid" class="asset-grid" style="padding:8px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inspector -->
+    <div id="panel-inspector" class="panel panel--inspector">
+        <div id="resizer-inspector" class="resizer resizer--h resizer--left"></div>
+        <div class="panel-header">
+            <svg viewBox="0 0 24 24" class="panel-header-icon"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span>Inspector</span>
+        </div>
+
+        <!-- Object header -->
+        <div class="inspector-obj-header">
+            <input type="checkbox" id="obj-active-checkbox" checked class="obj-checkbox">
+            <input type="text" id="inp-obj-name" class="obj-name-input" value="" placeholder="No Selection">
+        </div>
+
+        <!-- Transform -->
+        <div class="component-block" id="inspector-transform-section">
+            <div class="component-header">
+                <svg viewBox="0 0 24 24" class="comp-icon"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                <span>Transform</span>
+            </div>
+            <div class="component-body">
+                <div class="prop-row">
+                    <span class="prop-label">Position</span>
+                    <div class="vec3">
+                        <div class="vec3-field"><span class="axis-x">X</span><input type="number" id="inp-pos-x" value="0" step="0.1"></div>
+                        <div class="vec3-field"><span class="axis-y">Y</span><input type="number" id="inp-pos-y" value="0" step="0.1"></div>
+                        <div class="vec3-field"><span class="axis-z">Z</span><input type="number" id="inp-pos-z" value="0" step="0.1"></div>
+                    </div>
+                </div>
+                <div class="prop-row" id="transform-rot-row">
+                    <span class="prop-label">Rotation</span>
+                    <div class="vec3">
+                        <div class="vec3-field"><span class="axis-x">X</span><input type="number" value="0" disabled></div>
+                        <div class="vec3-field"><span class="axis-y">Y</span><input type="number" value="0" disabled></div>
+                        <div class="vec3-field"><span class="axis-z">Z</span><input type="number" id="inp-rot-z" value="0" step="1"></div>
+                    </div>
+                </div>
+                <div class="prop-row" id="transform-scale-row">
+                    <span class="prop-label">Scale</span>
+                    <div class="vec3">
+                        <div class="vec3-field"><span class="axis-x">X</span><input type="number" id="inp-scale-x" value="1" step="0.05"></div>
+                        <div class="vec3-field"><span class="axis-y">Y</span><input type="number" id="inp-scale-y" value="1" step="0.05"></div>
+                        <div class="vec3-field"><span class="axis-z">Z</span><input type="number" id="inp-scale-z" value="1" disabled></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sprite Renderer -->
+        <div class="component-block" id="inspector-sprite-section">
+            <div class="component-header">
+                <input type="checkbox" checked class="comp-toggle">
+                <svg viewBox="0 0 24 24" class="comp-icon"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 21"/></svg>
+                <span>Sprite Renderer</span>
+            </div>
+            <div class="component-body">
+                <div class="prop-row">
+                    <span class="prop-label">Tint</span>
+                    <input type="color" id="inp-color" value="#ffffff">
+                </div>
+            </div>
+        </div>
+
+        <!-- Animator -->
+        <div class="component-block" id="inspector-anim-section">
+            <div class="component-header">
+                <svg viewBox="0 0 24 24" class="comp-icon"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M8 4v16M2 9h6M2 15h6"/></svg>
+                <span>Animator</span>
+            </div>
+            <div class="component-body">
+                <div id="inspector-anim-summary" class="anim-summary">No animations</div>
+                <button id="btn-edit-animation" class="btn-secondary full-width">
+                    <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    Edit Animations
+                </button>
+            </div>
+        </div>
+
+        <!-- Light Inspector Mount (dynamic) -->
+        <div id="light-inspector-mount"></div>
+
+        <!-- Prefab Section -->
+        <div id="inspector-prefab-section" class="component-block" style="display:none; border-left:3px solid #4a8a4a;">
+            <div class="component-header" style="background:#1a2a1a;">
+                <svg viewBox="0 0 24 24" class="comp-icon" style="color:#8f8;"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-4 0v2"/></svg>
+                <span style="color:#8f8;font-weight:600;">Prefab Instance</span>
+            </div>
+            <div class="component-body" style="background:#131f13;">
+                <div class="prop-row">
+                    <span class="prop-label" style="color:#7ab;">Source</span>
+                    <span id="inspector-prefab-name" style="color:#9bc;font-size:11px;font-style:italic;">—</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">
+                    <button id="btn-prefab-apply-this" class="btn-prefab-action">
+                        <svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
+                        Apply to Prefab
+                    </button>
+                    <button id="btn-prefab-apply-all" class="btn-prefab-action" style="border-color:#3a8a6a;color:#6fc;">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 010 20"/></svg>
+                        Apply to All Instances
+                    </button>
+                    <button id="btn-prefab-unlink" class="btn-prefab-action" style="border-color:#6a5a3a;color:#cab;">
+                        <svg viewBox="0 0 24 24"><path d="M18.84 12.25l1.72-1.71a5 5 0 00-7.07-7.07L11.77 5.19M5.17 11.75L3.46 13.46a5 5 0 007.07 7.07l1.71-1.71"/><line x1="8" y1="2" x2="8" y2="5"/><line x1="2" y1="8" x2="5" y2="8"/></svg>
+                        Unlink from Prefab
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer actions -->
+        <div class="inspector-footer">
+            <button id="btn-save-prefab" class="btn-secondary full-width">
+                <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-4 0v2M12 12v4M10 14h4"/></svg>
+                Save as Prefab
+            </button>
+        </div>
+    </div>
+
+</div>
+
+<script type="module">
+import { startEngine } from './engine.core.js';
+
+window.onload = () => {
+    startEngine();
+
+    // Tab switching
+    const tabs = [
+        { btn: 'tab-assets-btn',  panel: 'tab-assets',   display: 'flex' },
+        { btn: 'tab-prefabs-btn', panel: 'tab-prefabs',  display: 'flex' },
+        { btn: 'tab-console-btn', panel: 'tab-console',  display: 'block' },
+    ];
+    tabs.forEach(t => {
+        document.getElementById(t.btn)?.addEventListener('click', () => {
+            tabs.forEach(o => {
+                document.getElementById(o.btn)?.classList.toggle('ptab--active', o.btn === t.btn);
+                const p = document.getElementById(o.panel);
+                if (p) p.style.display = o.btn === t.btn ? o.display : 'none';
+            });
+            if (t.btn === 'tab-prefabs-btn') {
+                import('./engine.ui.js').then(m => m.refreshPrefabPanel());
+            }
+        });
+    });
+
+    // Asset folder filters
+    const folders = [
+        { el: 'folder-all',     filter: 'all' },
+        { el: 'folder-sprites', filter: 'sprite' },
+        { el: 'folder-audio',   filter: 'audio' },
+    ];
+    folders.forEach(f => {
+        document.getElementById(f.el)?.addEventListener('click', () => {
+            folders.forEach(o => document.getElementById(o.el)?.classList.toggle('folder-item--active', o.el === f.el));
+            import('./engine.ui.js').then(m => m.setAssetFilter(f.filter));
+        });
+    });
+
+    // Scene switcher
+    document.getElementById('scene-switcher-btn')?.addEventListener('click', e => {
+        e.stopPropagation();
+        import('./engine.scenes.js').then(m => m.toggleSceneDropdown());
+    });
+
+    // Import button
+    document.getElementById('btn-import-asset')?.addEventListener('click', () => {
+        document.getElementById('asset-file-input')?.click();
+    });
+
+    // Drop hint
+    const pixi = document.getElementById('pixi-container');
+    const hint = document.getElementById('drop-hint');
+    pixi?.addEventListener('dragenter', () => hint && (hint.style.display='flex'));
+    pixi?.addEventListener('dragleave', () => hint && (hint.style.display='none'));
+    pixi?.addEventListener('drop',      () => hint && (hint.style.display='none'));
+};
+</script>
+</body>
+</html>
