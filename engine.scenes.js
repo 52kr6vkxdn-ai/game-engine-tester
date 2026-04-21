@@ -1,0 +1,361 @@
+/* ============================================================
+   Zengine — engine.scenes.js
+   Multi-scene management. Assets are shared across all scenes.
+   Each scene owns its own: gameObjects, camera position/zoom,
+   selected object, and gizmo state.
+   ============================================================ */
+
+import { state } from './engine.state.js';
+import { drawGrid } from './engine.renderer.js';
+import { syncPixiToInspector, refreshHierarchy, refreshAssetPanel } from './engine.ui.js';
+
+// ── Scene registry (lives in state.scenes) ────────────────────
+// state.scenes  = [ { id, name, snapshot: {...} }, ... ]
+// state.activeSceneIndex = number
+
+let _sceneCounter = 1;
+
+// ── Init: create the first scene slot ────────────────────────
+export function initScenes() {
+    state.scenes           = [];
+    state.activeSceneIndex = 0;
+
+    // "Scene-1" is the scene that was already set up by startEngine
+    state.scenes.push({
+        id:       'scene_1',
+        name:     'Scene-1',
+        snapshot: null,   // null = currently loaded, no need to save
+    });
+
+    _refreshSceneButton();
+}
+
+// ── Create a brand-new empty scene ───────────────────────────
+export function createScene(name) {
+    // Save current scene first
+    _saveCurrentScene();
+
+    _sceneCounter++;
+    const newName = name || `Scene-${_sceneCounter}`;
+    const id      = 'scene_' + Date.now();
+
+    state.scenes.push({ id, name: newName, snapshot: _emptySnapshot() });
+    state.activeSceneIndex = state.scenes.length - 1;
+
+    _loadScene(state.activeSceneIndex);
+    _refreshSceneButton();
+    _refreshSceneDropdown();
+}
+
+// ── Switch to an existing scene ───────────────────────────────
+export function switchToScene(index) {
+    if (index === state.activeSceneIndex) return;
+    if (index < 0 || index >= state.scenes.length) return;
+
+    _saveCurrentScene();
+    state.activeSceneIndex = index;
+    _loadScene(index);
+    _refreshSceneButton();
+    _refreshSceneDropdown();
+}
+
+// ── Rename active scene ───────────────────────────────────────
+export function renameScene(index, newName) {
+    if (!state.scenes[index]) return;
+    state.scenes[index].name = newName;
+    _refreshSceneButton();
+    _refreshSceneDropdown();
+}
+
+// ── Delete a scene (must keep at least one) ──────────────────
+export function deleteScene(index) {
+    if (state.scenes.length <= 1) return;
+
+    _saveCurrentScene();
+    state.scenes.splice(index, 1);
+
+    const newIdx = Math.max(0, Math.min(index, state.scenes.length - 1));
+    state.activeSceneIndex = newIdx;
+    _loadScene(newIdx);
+    _refreshSceneButton();
+    _refreshSceneDropdown();
+}
+
+// ── Save current live scene into snapshot ────────────────────
+function _saveCurrentScene() {
+    const idx   = state.activeSceneIndex;
+    const scene = state.scenes[idx];
+    if (!scene) return;
+
+    const objectSnapshots = state.gameObjects.map(obj => {
+        if (obj.isLight) {
+            return {
+                isLight: true, lightType: obj.lightType,
+                label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                lightProps: JSON.parse(JSON.stringify(obj.lightProps)),
+            };
+        }
+        return {
+            label: obj.label, isImage: obj.isImage, assetId: obj.assetId,
+            prefabId: obj.prefabId || null,
+            x: obj.x, y: obj.y, scaleX: obj.scale.x, scaleY: obj.scale.y,
+            rotation: obj.rotation, unityZ: obj.unityZ || 0,
+            tint: obj.spriteGraphic?.tint ?? 0xFFFFFF,
+            animations: obj.animations ? JSON.parse(JSON.stringify(obj.animations)) : [],
+            activeAnimIndex: obj.activeAnimIndex || 0,
+        };
+    });
+
+    scene.snapshot = {
+        objects:   objectSnapshots,
+        camX:      state.sceneContainer.x,
+        camY:      state.sceneContainer.y,
+        camScaleX: state.sceneContainer.scale.x,
+        camScaleY: state.sceneContainer.scale.y,
+    };
+}
+
+// ── Load a scene from snapshot ────────────────────────────────
+function _loadScene(index) {
+    const scene = state.scenes[index];
+    if (!scene) return;
+
+    for (const obj of state.gameObjects) {
+        state.sceneContainer.removeChild(obj);
+        try { obj.destroy({ children: true }); } catch(_) {}
+    }
+    state.gameObjects = []; state.gameObject = null; state.gizmoContainer = null;
+    state.grpTranslate = null; state.grpRotate = null; state.grpScale = null;
+    state._gizmoHandles = null; state.spriteBox = null;
+
+    const snap = scene.snapshot;
+    if (snap) {
+        state.sceneContainer.x       = snap.camX      ?? state.app.screen.width  / 2;
+        state.sceneContainer.y       = snap.camY      ?? state.app.screen.height / 2;
+        state.sceneContainer.scale.x = snap.camScaleX ?? 1;
+        state.sceneContainer.scale.y = snap.camScaleY ?? 1;
+    } else {
+        state.sceneContainer.x = state.app.screen.width  / 2;
+        state.sceneContainer.y = state.app.screen.height / 2;
+        state.sceneContainer.scale.set(1);
+    }
+
+    drawGrid();
+
+    if (snap?.objects?.length) {
+        const restoreAll = snap.objects.map(s => {
+            if (s.isLight) {
+                return import('./engine.lights.js').then(({ createLight, _buildLightHelper }) => {
+                    const obj = createLight(s.lightType, s.x, s.y);
+                    if (!obj) return;
+                    obj.label = s.label; obj.unityZ = s.unityZ || 0;
+                    obj.lightProps = JSON.parse(JSON.stringify(s.lightProps));
+                    _buildLightHelper(obj);
+                });
+            }
+            return import('./engine.objects.js').then(({ createImageObject }) => {
+                if (!s.isImage || !s.assetId) return;
+                const asset = state.assets.find(a => a.id === s.assetId);
+                if (!asset) return;
+                const obj = createImageObject(asset, s.x, s.y);
+                if (!obj) return;
+                obj.label = s.label; obj.scale.x = s.scaleX; obj.scale.y = s.scaleY;
+                obj.rotation = s.rotation; obj.unityZ = s.unityZ; obj.prefabId = s.prefabId || null;
+                if (obj.spriteGraphic?.tint !== undefined) obj.spriteGraphic.tint = s.tint;
+                if (s.animations?.length) { obj.animations = JSON.parse(JSON.stringify(s.animations)); obj.activeAnimIndex = s.activeAnimIndex || 0; }
+                if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
+            });
+        });
+        Promise.all(restoreAll).then(() => {
+            if (state.gameObjects.length > 0) {
+                import('./engine.objects.js').then(({ selectObject }) => {
+                    selectObject(state.gameObjects[state.gameObjects.length - 1]);
+                });
+            }
+            refreshHierarchy();
+            syncPixiToInspector();
+        });
+    } else {
+        refreshHierarchy();
+        syncPixiToInspector();
+    }
+
+    const sceneLabel = document.getElementById('hierarchy-scene-label');
+    if (sceneLabel) sceneLabel.textContent = scene.name;
+}
+
+// ── Empty snapshot (new blank scene) ─────────────────────────
+function _emptySnapshot() {
+    return {
+        objects:   [],
+        camX:      null,
+        camY:      null,
+        camScaleX: 1,
+        camScaleY: 1,
+    };
+}
+
+// ── Refresh the scene button label in toolbar ─────────────────
+function _refreshSceneButton() {
+    const btn = document.getElementById('scene-switcher-btn');
+    const active = state.scenes[state.activeSceneIndex];
+    if (!active) return;
+
+    const lbl = document.getElementById('hierarchy-scene-label');
+    if (lbl) lbl.textContent = active.name;
+
+    const sceneBtnLabel = document.getElementById('scene-btn-label');
+    if (sceneBtnLabel) sceneBtnLabel.textContent = active.name;
+}
+
+// ── Refresh the open dropdown if it's visible ────────────────
+function _refreshSceneDropdown() {
+    const existing = document.getElementById('scene-dropdown');
+    if (existing) _buildSceneDropdown();
+}
+
+// ── Build & show scene dropdown ───────────────────────────────
+export function toggleSceneDropdown() {
+    const existing = document.getElementById('scene-dropdown');
+    if (existing) { existing.remove(); return; }
+    _buildSceneDropdown();
+}
+
+function _buildSceneDropdown() {
+    document.getElementById('scene-dropdown')?.remove();
+
+    const btn  = document.getElementById('scene-switcher-btn');
+    const rect = btn?.getBoundingClientRect();
+    if (!rect) return;
+
+    const panel = document.createElement('div');
+    panel.id = 'scene-dropdown';
+    panel.style.cssText = `
+        position: fixed;
+        left: ${rect.left}px;
+        top: ${rect.bottom + 4}px;
+        min-width: 220px;
+        background: #1a1a24;
+        border: 1px solid #3a3a48;
+        border-radius: 6px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+        z-index: 9999;
+        font-size: 11px;
+        color: #d8d8e8;
+        overflow: hidden;
+    `;
+
+    // Header
+    panel.innerHTML = `
+        <div style="padding:8px 12px; background:#1a1a1a; border-bottom:1px solid #333;
+                    font-size:10px; font-weight:bold; color:#888; letter-spacing:1px;">
+            SCENES
+        </div>
+    `;
+
+    // Scene rows
+    state.scenes.forEach((scene, i) => {
+        const isActive = i === state.activeSceneIndex;
+        const row = document.createElement('div');
+        row.style.cssText = `
+            display: flex; align-items: center;
+            padding: 7px 12px;
+            background: ${isActive ? '#1e3a5a' : 'transparent'};
+            border-left: 3px solid ${isActive ? '#3A72A5' : 'transparent'};
+            cursor: pointer; gap: 8px;
+        `;
+
+        row.innerHTML = `
+            <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:none;stroke:${isActive ? '#3A72A5' : '#666'};stroke-width:2;flex-shrink:0;">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <path d="M3 9h18M9 21V9"/>
+            </svg>
+            <span class="scene-row-name" data-idx="${i}" style="flex:1;color:${isActive ? '#fff' : '#ccc'};
+                  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                  title="Double-click to rename">${scene.name}</span>
+            ${isActive ? '<span style="color:#3A72A5;font-size:9px;font-weight:bold;">ACTIVE</span>' : ''}
+            <button class="scene-del-btn" data-idx="${i}"
+                    style="background:none;border:none;color:#555;cursor:pointer;font-size:12px;padding:0 2px;
+                           display:${state.scenes.length > 1 ? 'block' : 'none'};"
+                    title="Delete scene">✕</button>
+        `;
+
+        // Click row → switch scene
+        row.addEventListener('click', (e) => {
+            if (e.target.classList.contains('scene-del-btn')) return;
+            if (e.target.classList.contains('scene-row-name') && e.detail === 2) return; // dblclick handled below
+            panel.remove();
+            switchToScene(i);
+        });
+
+        // Double-click name → rename inline
+        const nameEl = row.querySelector('.scene-row-name');
+        nameEl.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            const inp = document.createElement('input');
+            inp.type  = 'text';
+            inp.value = scene.name;
+            inp.style.cssText = `
+                background:#1e1e1e; border:1px solid #3A72A5; color:#fff;
+                font-size:11px; padding:1px 4px; border-radius:2px; width:100%; outline:none;
+            `;
+            nameEl.replaceWith(inp);
+            inp.focus(); inp.select();
+            const commit = () => {
+                const v = inp.value.trim() || scene.name;
+                renameScene(i, v);
+            };
+            inp.addEventListener('blur', commit);
+            inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') inp.blur(); ev.stopPropagation(); });
+        });
+
+        // Delete button
+        row.querySelector('.scene-del-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (confirm(`Delete "${scene.name}"? This cannot be undone.`)) {
+                panel.remove();
+                deleteScene(i);
+            }
+        });
+
+        // Hover
+        row.addEventListener('mouseenter', () => { if (!isActive) row.style.background = '#2a2a2a'; });
+        row.addEventListener('mouseleave', () => { if (!isActive) row.style.background = 'transparent'; });
+
+        panel.appendChild(row);
+    });
+
+    // Divider
+    const div = document.createElement('div');
+    div.style.cssText = 'border-top:1px solid #333; margin:2px 0;';
+    panel.appendChild(div);
+
+    // New scene button
+    const newBtn = document.createElement('div');
+    newBtn.style.cssText = `
+        padding: 8px 12px; cursor: pointer; display:flex; align-items:center; gap:8px;
+        color: #8f8;
+    `;
+    newBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:none;stroke:#8f8;stroke-width:2;flex-shrink:0;">
+            <circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/>
+        </svg>
+        New Scene
+    `;
+    newBtn.addEventListener('click', () => { panel.remove(); createScene(); });
+    newBtn.addEventListener('mouseenter', () => newBtn.style.background = '#1e2e1e');
+    newBtn.addEventListener('mouseleave', () => newBtn.style.background = '');
+    panel.appendChild(newBtn);
+
+    document.body.appendChild(panel);
+
+    // Close on outside click
+    setTimeout(() => {
+        document.addEventListener('click', function handler(e) {
+            if (!panel.contains(e.target) && e.target.id !== 'scene-switcher-btn') {
+                panel.remove();
+                document.removeEventListener('click', handler);
+            }
+        });
+    }, 0);
+}
