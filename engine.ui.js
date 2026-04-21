@@ -287,32 +287,6 @@ export function refreshHierarchy() {
         item.dataset.objId = state.gameObjects.indexOf(obj);
         item.style.cssText = 'display:flex; align-items:center; justify-content:space-between; padding: 3px 8px; cursor:pointer;';
 
-        const left = document.createElement('div');
-        left.style.cssText = 'display:flex; align-items:center; flex:1; min-width:0;';
-
-        // Icon — light icon, idle frame thumb, or shape fallback
-        const idleAnim  = obj.animations?.find(a => a.isIdle) || obj.animations?.[obj.activeAnimIndex || 0];
-        const idleFrame = idleAnim?.frames?.[0]?.dataURL;
-
-        if (obj.isLight) {
-            const iconMap = { point:'💡', spot:'🔦', directional:'☀️', area:'▭' };
-            const span = document.createElement('span');
-            span.style.cssText = 'font-size:13px; margin-right:5px; flex-shrink:0;';
-            span.textContent = iconMap[obj.lightType] || '💡';
-            left.appendChild(span);
-        } else if (idleFrame) {
-            const thumb = document.createElement('img');
-            thumb.src = idleFrame;
-            thumb.style.cssText = 'width:16px; height:16px; object-fit:contain; margin-right:4px; flex-shrink:0; border-radius:2px; background:#111;';
-            left.appendChild(thumb);
-        } else {
-            const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            icon.setAttribute('viewBox','0 0 24 24');
-            icon.style.cssText = 'width:14px; height:14px; fill:none; stroke:#aaa; stroke-width:1.5; margin-right:4px; flex-shrink:0;';
-            icon.innerHTML = '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="#aaa"/><path d="M21 15l-5-5L5 21"/>';
-            left.appendChild(icon);
-        }
-
         // Name (double-click to rename)
         const nameEl = document.createElement('span');
         nameEl.className = 'tree-item-name';

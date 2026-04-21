@@ -246,13 +246,288 @@ export function setLightHelpersVisible(visible) {
     }
 }
 
-// ── Apply 2D lighting to the scene (composite blend) ─────────
-// We use PIXI's multiply/add blend on a lighting layer
-export function applyLighting() {
-    // For now, lighting is rendered via helper overlays.
-    // A full GPU lighting pipeline would require render textures.
-    // TODO: Implement render-texture-based shadow+light compositing.
+// ============================================================
+//  DYNAMIC 2D LIGHTING COMPOSITOR
+//  - Builds an offscreen "darkness" RenderTexture filled with
+//    ambient color, then ADD-blends each light's contribution
+//    using cached gradient/cone/area textures. The result is
+//    blitted over the scene with MULTIPLY → unlit areas darken,
+//    lit areas reveal full color.
+//  - A second additive "bloom" pass on top gives soft halos.
+// ============================================================
+
+const _lightTexCache = new Map();
+let _lightingInited  = false;
+let _lightingTickerFn = null;
+
+// Editor ambient is brighter so the scene stays workable; play mode
+// drops to a dramatic dark ambient so lights pop.
+const AMBIENT_EDIT = 0x6e6e80;
+const AMBIENT_PLAY = 0x0e0e1a;
+
+export function initLighting() {
+    if (_lightingInited || !state.app) return;
+    const { app } = state;
+    const w = Math.max(1, app.screen.width);
+    const h = Math.max(1, app.screen.height);
+    const res = app.renderer.resolution;
+
+    state.lightingMaskRT     = PIXI.RenderTexture.create({ width: w, height: h, resolution: res });
+    state.lightingMaskSprite = new PIXI.Sprite(state.lightingMaskRT);
+    state.lightingMaskSprite.blendMode = PIXI.BLEND_MODES.MULTIPLY;
+    state.lightingMaskSprite.eventMode = 'none';
+
+    state.lightingGlowRT     = PIXI.RenderTexture.create({ width: w, height: h, resolution: res });
+    state.lightingGlowSprite = new PIXI.Sprite(state.lightingGlowRT);
+    state.lightingGlowSprite.blendMode = PIXI.BLEND_MODES.ADD;
+    state.lightingGlowSprite.eventMode = 'none';
+
+    // Sit on top of the scene container, below any future overlay UI
+    app.stage.addChild(state.lightingMaskSprite);
+    app.stage.addChild(state.lightingGlowSprite);
+
+    state._lightingScratch = new PIXI.Container();
+
+    _lightingTickerFn = _renderLightingFrame;
+    app.ticker.add(_lightingTickerFn);
+
+    app.renderer.on('resize', _onLightingResize);
+    _lightingInited = true;
 }
+
+function _onLightingResize() {
+    const { app } = state;
+    if (!state.lightingMaskRT) return;
+    const w = Math.max(1, app.screen.width);
+    const h = Math.max(1, app.screen.height);
+    state.lightingMaskRT.resize(w, h);
+    state.lightingGlowRT.resize(w, h);
+}
+
+function _renderLightingFrame() {
+    if (!_lightingInited) return;
+    const { app, sceneContainer } = state;
+    if (!sceneContainer) return;
+
+    const lights = state.gameObjects.filter(o => o.isLight && o.lightProps?.enabled);
+
+    if (!lights.length) {
+        state.lightingMaskSprite.visible = false;
+        state.lightingGlowSprite.visible = false;
+        return;
+    }
+    state.lightingMaskSprite.visible = true;
+    state.lightingGlowSprite.visible = true;
+
+    const scratch = state._lightingScratch;
+    scratch.removeChildren();
+
+    // ── Pass 1: darkness mask (MULTIPLY) ──────────────────
+    const ambient = state.isPlaying ? (state.ambientPlay ?? AMBIENT_PLAY)
+                                    : (state.ambientEdit ?? AMBIENT_EDIT);
+    const base = new PIXI.Sprite(PIXI.Texture.WHITE);
+    base.tint = ambient;
+    base.width  = app.screen.width;
+    base.height = app.screen.height;
+    scratch.addChild(base);
+
+    for (const L of lights) {
+        const s = _buildLightContribution(L, false);
+        if (s) scratch.addChild(s);
+    }
+    app.renderer.render(scratch, { renderTexture: state.lightingMaskRT, clear: true });
+
+    // ── Pass 2: bloom/glow (ADD) ──────────────────────────
+    scratch.removeChildren();
+    for (const L of lights) {
+        const s = _buildLightContribution(L, true);
+        if (s) scratch.addChild(s);
+    }
+    app.renderer.render(scratch, { renderTexture: state.lightingGlowRT, clear: true });
+}
+
+function _buildLightContribution(L, forGlow) {
+    const p = L.lightProps;
+    if (!p) return null;
+    const camScale = state.sceneContainer.scale.x;
+
+    // Scene-local → screen position
+    const pos = state.sceneContainer.toGlobal(new PIXI.Point(L.x, L.y));
+
+    // Glow contribution is softer and slightly tinted-up
+    const intensityMul = forGlow ? 0.45 : 1.0;
+    const baseIntensity = (p.intensity ?? 1) * intensityMul;
+
+    if (L.lightType === 'directional') {
+        // A directional/sun light tints everything additively.
+        // We bias the tint toward the light direction with a soft gradient.
+        const tex = _getDirectionalTexture(p.softness ?? 0.3);
+        const s = new PIXI.Sprite(tex);
+        s.anchor.set(0.5);
+        s.width  = state.app.screen.width  * 1.5;
+        s.height = state.app.screen.height * 1.5;
+        s.x = state.app.screen.width  / 2;
+        s.y = state.app.screen.height / 2;
+        s.rotation = ((p.angle ?? 0) * Math.PI) / 180;
+        s.tint = p.color ?? 0xFFFFFF;
+        s.blendMode = PIXI.BLEND_MODES.ADD;
+        s.alpha = Math.min(1.0, baseIntensity * 0.6);
+        return s;
+    }
+
+    let tex, w, h, rotation = 0;
+    if (L.lightType === 'point') {
+        tex = _getPointTexture(p.falloff ?? 2);
+        const r = (p.radius ?? 200) * camScale * 2;
+        w = h = r;
+    } else if (L.lightType === 'spot') {
+        tex = _getSpotTexture(p.angle ?? 45, p.falloff ?? 1.8);
+        const r = (p.radius ?? 250) * camScale * 2;
+        w = h = r;
+        rotation = ((p.direction ?? 0) * Math.PI) / 180;
+    } else if (L.lightType === 'area') {
+        tex = _getAreaTexture(p.falloff ?? 1.5);
+        // Soft texture is square; stretch to width/height with a bit of bleed
+        w = (p.width  ?? 150) * camScale * 1.8;
+        h = (p.height ?? 80)  * camScale * 1.8;
+    } else {
+        return null;
+    }
+
+    const s = new PIXI.Sprite(tex);
+    s.anchor.set(0.5);
+    s.x = pos.x;
+    s.y = pos.y;
+    s.width  = w;
+    s.height = h;
+    s.rotation = rotation;
+    s.tint = p.color ?? 0xFFFFFF;
+    s.blendMode = PIXI.BLEND_MODES.ADD;
+    s.alpha = Math.min(2.0, baseIntensity);
+    return s;
+}
+
+// Cached gradient textures ────────────────────────────────────
+function _getPointTexture(falloff) {
+    const key = `point:${Math.round(falloff * 10)}`;
+    if (_lightTexCache.has(key)) return _lightTexCache.get(key);
+    const size = 256;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const cx = size / 2, cy = size / 2;
+    const img = ctx.createImageData(size, size);
+    const data = img.data;
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            const dx = (x - cx) / cx, dy = (y - cy) / cy;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            const t = Math.max(0, 1 - d);
+            const a = Math.pow(t, falloff);
+            const i = (y * size + x) * 4;
+            data[i] = 255; data[i + 1] = 255; data[i + 2] = 255;
+            data[i + 3] = (a * 255) | 0;
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = PIXI.Texture.from(c);
+    _lightTexCache.set(key, tex);
+    return tex;
+}
+
+function _getSpotTexture(angleDeg, falloff) {
+    const key = `spot:${Math.round(angleDeg)}:${Math.round(falloff * 10)}`;
+    if (_lightTexCache.has(key)) return _lightTexCache.get(key);
+    const size = 256;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const cx = size / 2, cy = size / 2;
+    const halfRad = (angleDeg / 2) * Math.PI / 180;
+    const img = ctx.createImageData(size, size);
+    const data = img.data;
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            const dx = (x - cx) / cx, dy = (y - cy) / cy;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            let a = 0;
+            if (d <= 1 && (dx !== 0 || dy !== 0)) {
+                // Cone axis points along +X (rotation handled by sprite)
+                const ang = Math.atan2(dy, dx);
+                const aa = Math.abs(ang);
+                const angT = 1 - Math.min(1, aa / halfRad);
+                // Soft edge on the cone sides
+                const angSoft = Math.pow(Math.max(0, angT), 1.3);
+                const radSoft = Math.pow(1 - d, falloff);
+                a = angSoft * radSoft;
+            }
+            const i = (y * size + x) * 4;
+            data[i] = 255; data[i + 1] = 255; data[i + 2] = 255;
+            data[i + 3] = (Math.min(1, a) * 255) | 0;
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = PIXI.Texture.from(c);
+    _lightTexCache.set(key, tex);
+    return tex;
+}
+
+function _getAreaTexture(falloff) {
+    const key = `area:${Math.round(falloff * 10)}`;
+    if (_lightTexCache.has(key)) return _lightTexCache.get(key);
+    const size = 128;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const img = ctx.createImageData(size, size);
+    const data = img.data;
+    const half = size / 2;
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            // Squared distance from edge — gives a soft rectangle with rounded corners
+            const fx = Math.max(0, Math.abs(x - half) / half);
+            const fy = Math.max(0, Math.abs(y - half) / half);
+            const d  = Math.sqrt(fx * fx + fy * fy) * 0.85 + Math.max(fx, fy) * 0.15;
+            const a  = Math.pow(Math.max(0, 1 - d), falloff);
+            const i  = (y * size + x) * 4;
+            data[i] = 255; data[i + 1] = 255; data[i + 2] = 255;
+            data[i + 3] = (Math.min(1, a) * 255) | 0;
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = PIXI.Texture.from(c);
+    _lightTexCache.set(key, tex);
+    return tex;
+}
+
+function _getDirectionalTexture(softness) {
+    const key = `dir:${Math.round(softness * 100)}`;
+    if (_lightTexCache.has(key)) return _lightTexCache.get(key);
+    const size = 256;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const img = ctx.createImageData(size, size);
+    const data = img.data;
+    // Gradient that brightens toward +X side, softness widens the bright band
+    const sharpness = 1 + (1 - Math.min(1, Math.max(0, softness))) * 4;
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            const tx = x / (size - 1);     // 0 (left/back) → 1 (right/front)
+            const a  = Math.pow(tx, sharpness);
+            const i  = (y * size + x) * 4;
+            data[i] = 255; data[i + 1] = 255; data[i + 2] = 255;
+            data[i + 3] = (Math.min(1, a) * 255) | 0;
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = PIXI.Texture.from(c);
+    _lightTexCache.set(key, tex);
+    return tex;
+}
+
+// Legacy entry point — kept for older callers
+export function applyLighting() { initLighting(); }
 
 // ── Inspector HTML for a light object ───────────────────────
 export function buildLightInspectorHTML(obj) {

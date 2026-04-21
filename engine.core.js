@@ -20,7 +20,7 @@ import { initScenes, toggleSceneDropdown } from './engine.scenes.js';
 import { undo, redo, updateUndoButtons }   from './engine.history.js';
 import { enterPlayMode, pausePlayMode, stopPlayMode, drawCameraBounds } from './engine.playmode.js';
 import { saveProject, loadProject, newProject } from './engine.project.js';
-import { createLight, LIGHT_TYPES } from './engine.lights.js';
+import { createLight, LIGHT_TYPES, initLighting } from './engine.lights.js';
 import { createTilemap } from './engine.tilemap.js';
 
 export function startEngine() {
@@ -57,6 +57,7 @@ export function startEngine() {
     PIXI.settings.MIPMAP_TEXTURES = PIXI.MIPMAP_MODES.ON;
 
     initScene();
+    initLighting();
     startGizmoSizeTicker();
     initCameraControls();
     initGizmoDrag();
@@ -278,7 +279,6 @@ function initMenus() {
             ]);
         });
     }
-}
 }
 
 function toggleMenu(anchor, items) {
