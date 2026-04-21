@@ -21,6 +21,7 @@ import { undo, redo, updateUndoButtons }   from './engine.history.js';
 import { enterPlayMode, pausePlayMode, stopPlayMode, drawCameraBounds } from './engine.playmode.js';
 import { saveProject, loadProject, newProject } from './engine.project.js';
 import { createLight, LIGHT_TYPES } from './engine.lights.js';
+import { createTilemap } from './engine.tilemap.js';
 
 export function startEngine() {
     if (typeof PIXI === 'undefined') {
@@ -256,7 +257,7 @@ function initMenus() {
         });
     }
 
-    // GameObject menu — lights only
+    // GameObject menu — lights + tilemap
     const goBtn = document.getElementById('menu-gameobject');
     if (goBtn) {
         goBtn.addEventListener('click', (e) => {
@@ -268,6 +269,12 @@ function initMenus() {
             toggleMenu(goBtn, [
                 { label: '── 2D Lights ──', disabled: true },
                 ...lightItems,
+                { separator: true },
+                { label: '── World ──', disabled: true },
+                {
+                    label: '▦  Tilemap',
+                    action: () => createTilemap(),
+                },
             ]);
         });
     }
@@ -389,6 +396,12 @@ function _copySelected() {
             label: obj.label, x: obj.x + 25, y: obj.y + 25, unityZ: obj.unityZ || 0,
             lightProps: JSON.parse(JSON.stringify(obj.lightProps)),
         };
+    } else if (obj.isTilemap) {
+        state.clipboard = {
+            isTilemap: true,
+            label: obj.label, x: obj.x + 25, y: obj.y + 25, unityZ: obj.unityZ || 0,
+            tilemapData: { ...obj.tilemapData, tiles: Array.from(obj.tilemapData.tiles) },
+        };
     } else {
         state.clipboard = {
             label: obj.label, isImage: obj.isImage, assetId: obj.assetId,
@@ -419,6 +432,18 @@ function _pasteObject() {
             _buildLightHelper(obj);
             state.clipboard = { ...cb, x: cb.x + 25, y: cb.y + 25 };
             _logConsole('⎗ Pasted: ' + obj.label, '#8f8');
+        });
+        return;
+    }
+    // Tilemap paste
+    if (cb.isTilemap) {
+        import('./engine.tilemap.js').then(({ restoreTilemap }) => {
+            restoreTilemap({ ...cb }).then(obj => {
+                if (!obj) return;
+                obj.label = cb.label + ' (copy)';
+                state.clipboard = { ...cb, x: cb.x + 25, y: cb.y + 25 };
+                _logConsole('⎗ Pasted: ' + obj.label, '#8f8');
+            });
         });
         return;
     }

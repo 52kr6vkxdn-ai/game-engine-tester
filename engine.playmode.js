@@ -236,8 +236,8 @@ function _showEditorUI() {
 function _hideAllGizmosAndGrid() {
     state.gameObjects.forEach(obj => {
         if (obj._gizmoContainer) obj._gizmoContainer.visible = false;
-        // Hide light helpers in play mode
         if (obj.isLight && obj._lightHelper) obj._lightHelper.visible = false;
+        if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = false;
     });
     if (state.gridGraphics) state.gridGraphics.visible = false;
     if (state.spriteBox)    state.spriteBox.visible    = false;
@@ -323,6 +323,12 @@ function _snapshotScene() {
                     lightProps: JSON.parse(JSON.stringify(obj.lightProps)),
                 };
             }
+            if (obj.isTilemap) {
+                return {
+                    isTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                    tilemapData: { ...obj.tilemapData, tiles: Array.from(obj.tilemapData.tiles) },
+                };
+            }
             return {
                 label: obj.label, isImage: obj.isImage, assetId: obj.assetId,
                 prefabId: obj.prefabId || null, x: obj.x, y: obj.y,
@@ -359,6 +365,9 @@ function _restoreScene(snap) {
                 _buildLightHelper(obj);
                 return obj;
             });
+        }
+        if (s.isTilemap) {
+            return import('./engine.tilemap.js').then(({ restoreTilemap }) => restoreTilemap(s));
         }
         return import('./engine.objects.js').then(({ createImageObject, selectObject }) => {
             if (s.isImage && s.assetId) {
@@ -400,7 +409,13 @@ function _logConsole(msg,color='#e0e0e0'){
 
 export function startRuntimeAnimations() {
     for (const obj of state.gameObjects) {
-        if (obj.isLight) { obj.visible = false; continue; } // lights invisible in play
+        if (obj.isLight) { obj.visible = false; continue; }
+        if (obj.isTilemap) {
+            // Keep tile sprites visible, rebuild from data now
+            obj.visible = true;
+            import('./engine.tilemap.js').then(m => m.rebuildTilemapSprites(obj));
+            continue;
+        }
         obj.visible = true;
         _playObjectIdleAnim(obj);
     }
@@ -414,6 +429,7 @@ export function stopRuntimeAnimations() {
         obj.visible = true;
         // Restore light helpers
         if (obj.isLight && obj._lightHelper) obj._lightHelper.visible = true;
+        if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = true;
     }
 }
 
@@ -434,7 +450,7 @@ function _startCulling() {
         const camBottom = sc.y + hh * sc.scale.y;
 
         for (const obj of state.gameObjects) {
-            if (obj.isLight) continue;
+            if (obj.isLight || obj.isTilemap) continue; // handled separately
             const bounds = obj.getBounds();
             if (bounds.width < 1 || bounds.height < 1) continue;
             // Fully outside → hide

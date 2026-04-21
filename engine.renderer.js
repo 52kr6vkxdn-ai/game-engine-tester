@@ -70,8 +70,8 @@ export function startGizmoSizeTicker() {
         for (const obj of state.gameObjects) {
             const gc = obj._gizmoContainer;
             if (!gc) continue;
-            if (obj.isLight) {
-                // Lights don't scale — keep gizmo at constant screen size
+            // Lights and tilemaps: constant screen-size gizmo
+            if (obj.isLight || obj.isTilemap) {
                 gc.scale.set(1 / camScale, 1 / camScale);
             } else {
                 gc.scale.set(

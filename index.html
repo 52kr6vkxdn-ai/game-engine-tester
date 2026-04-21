@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <!-- this is index -->
 
 <input type="file" id="asset-file-input" accept="image/*,audio/*" multiple style="display:none;">
 
@@ -228,10 +227,8 @@
                 </div>
                 <div class="prop-row" id="transform-rot-row">
                     <span class="prop-label">Rotation</span>
-                    <div class="vec3">
-                        <div class="vec3-field"><span class="axis-x">X</span><input type="number" value="0" disabled></div>
-                        <div class="vec3-field"><span class="axis-y">Y</span><input type="number" value="0" disabled></div>
-                        <div class="vec3-field"><span class="axis-z">Z</span><input type="number" id="inp-rot-z" value="0" step="1"></div>
+                    <div class="vec3" style="justify-content:flex-end;">
+                        <div class="vec3-field" style="max-width:90px;"><span class="axis-z">Z</span><input type="number" id="inp-rot-z" value="0" step="1"></div>
                     </div>
                 </div>
                 <div class="prop-row" id="transform-scale-row">
@@ -239,7 +236,6 @@
                     <div class="vec3">
                         <div class="vec3-field"><span class="axis-x">X</span><input type="number" id="inp-scale-x" value="1" step="0.05"></div>
                         <div class="vec3-field"><span class="axis-y">Y</span><input type="number" id="inp-scale-y" value="1" step="0.05"></div>
-                        <div class="vec3-field"><span class="axis-z">Z</span><input type="number" id="inp-scale-z" value="1" disabled></div>
                     </div>
                 </div>
             </div>

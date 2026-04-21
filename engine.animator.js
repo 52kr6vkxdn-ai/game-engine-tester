@@ -101,6 +101,16 @@ function _buildHTML(obj) {
             ⬆ Import ZIP / Images
         </label>
         <input type="file" id="anim-file-input" accept=".zip,image/*" multiple style="display:none;">
+        <!-- Spritesheet slicer -->
+        <button id="anim-slice-sheet-btn" style="background:#2a3a2a; border:1px solid #4ade80; color:#4ade80;
+                border-radius:3px; padding:4px 12px; cursor:pointer; font-size:11px; display:flex; align-items:center; gap:5px;">
+            <svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>
+              <line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>
+            </svg>
+            Slice Sheet
+        </button>
         <button id="anim-close-btn" style="background:#3a2a2a; border:1px solid #6a3a3a; color:#f88;
                 border-radius:3px; padding:4px 12px; cursor:pointer; font-size:12px;">✕ Close</button>
     </div>
@@ -256,6 +266,11 @@ function _wire(modal, obj) {
     modal.querySelector('#anim-close-btn').addEventListener('click', () => {
         _stopPreview(obj);
         modal.remove();
+    });
+
+    // ── Slice Sheet ─────────────────────────────────────────
+    modal.querySelector('#anim-slice-sheet-btn')?.addEventListener('click', () => {
+        import('./engine.spritesheet.js').then(m => m.openSpritesheetSlicer(obj));
     });
 
     // ── Import file(s) ──────────────────────────────────────

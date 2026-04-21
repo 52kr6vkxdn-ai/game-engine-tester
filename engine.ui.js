@@ -55,22 +55,38 @@ export function syncPixiToInspector() {
 
     if (go.isLight) {
         // Hide transform rotation/scale rows for lights
-        if (transformSection) {
-            const rotRow   = document.getElementById('transform-rot-row');
-            const scaleRow = document.getElementById('transform-scale-row');
-            if (rotRow)   rotRow.style.display   = 'none';
-            if (scaleRow) scaleRow.style.display = 'none';
-        }
-        // Show light inspector, hide sprite/anim
+        const rotRow   = document.getElementById('transform-rot-row');
+        const scaleRow = document.getElementById('transform-scale-row');
+        if (rotRow)   rotRow.style.display   = 'none';
+        if (scaleRow) scaleRow.style.display = 'none';
         if (spriteSection) spriteSection.style.display = 'none';
         if (animSection)   animSection.style.display   = 'none';
         if (pfSection)     pfSection.style.display      = 'none';
-        // Inject light inspector HTML
         const lightMount = document.getElementById('light-inspector-mount');
         if (lightMount) {
             import('./engine.lights.js').then(m => {
                 lightMount.innerHTML = m.buildLightInspectorHTML(go);
                 m.bindLightInspector(go);
+            });
+        }
+        return;
+    }
+
+    if (go.isTilemap) {
+        const rotRow   = document.getElementById('transform-rot-row');
+        const scaleRow = document.getElementById('transform-scale-row');
+        if (rotRow)   rotRow.style.display   = 'none';
+        if (scaleRow) scaleRow.style.display = 'none';
+        if (spriteSection) spriteSection.style.display = 'none';
+        if (animSection)   animSection.style.display   = 'none';
+        if (pfSection)     pfSection.style.display      = 'none';
+        const lightMount = document.getElementById('light-inspector-mount');
+        if (lightMount) {
+            import('./engine.tilemap.js').then(m => {
+                lightMount.innerHTML = m.buildTilemapInspectorHTML(go);
+                document.getElementById('btn-open-tilemap-editor')?.addEventListener('click', () => {
+                    m.openTilemapEditor(go);
+                });
             });
         }
         return;
@@ -140,8 +156,8 @@ export function syncInspectorToPixi() {
     const zChanged = newZ !== (go.unityZ || 0);
     go.unityZ = newZ;
 
-    // Rotation and scale only for sprites
-    if (!go.isLight) {
+    // Rotation and scale only for sprites (not lights or tilemaps)
+    if (!go.isLight && !go.isTilemap) {
         const newRot = (parseFloat(els.rz?.value) || 0) * -Math.PI / 180;
         const newSX  = parseFloat(els.sx?.value) || 1;
         const newSY  = parseFloat(els.sy?.value) || 1;
@@ -230,17 +246,23 @@ export function initInspectorListeners() {
 export function setGizmoMode(mode) {
     state.gizmoMode = mode;
 
-    // Apply to ALL objects
+    // Apply to selected object only; lights always use translate-only gizmo
     for (const obj of state.gameObjects) {
         if (!obj._grpTranslate) continue;
-        obj._grpTranslate.visible = mode === 'translate' || mode === 'all';
-        obj._grpRotate.visible    = mode === 'rotate'    || mode === 'all';
-        obj._grpScale.visible     = mode === 'scale'     || mode === 'all';
-        // Only show gizmos on selected
-        if (obj !== state.gameObject) {
+        const isSelected = obj === state.gameObject;
+        if (!isSelected) {
             obj._grpTranslate.visible = false;
             obj._grpRotate.visible    = false;
             obj._grpScale.visible     = false;
+        } else if (obj.isLight) {
+            // Lights: translate always visible, no rotate/scale gizmo
+            obj._grpTranslate.visible = true;
+            obj._grpRotate.visible    = false;
+            obj._grpScale.visible     = false;
+        } else {
+            obj._grpTranslate.visible = mode === 'translate' || mode === 'all';
+            obj._grpRotate.visible    = mode === 'rotate'    || mode === 'all';
+            obj._grpScale.visible     = mode === 'scale'     || mode === 'all';
         }
     }
 
@@ -330,6 +352,12 @@ export function refreshHierarchy() {
             span.style.cssText = 'font-size:12px;flex-shrink:0;';
             span.textContent = iconMap[obj.lightType] || '💡';
             left.appendChild(span);
+        } else if (obj.isTilemap) {
+            const icon = document.createElementNS('http://www.w3.org/2000/svg','svg');
+            icon.setAttribute('viewBox','0 0 24 24');
+            icon.style.cssText='width:14px;height:14px;fill:none;stroke:#4ade80;stroke-width:2;flex-shrink:0;';
+            icon.innerHTML='<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>';
+            left.appendChild(icon);
         } else {
             const idleAnim  = obj.animations?.find(a => a.isIdle) || obj.animations?.[obj.activeAnimIndex || 0];
             const idleFrame = idleAnim?.frames?.[0]?.dataURL;
@@ -351,6 +379,15 @@ export function refreshHierarchy() {
             const badge = document.createElement('span');
             badge.className = 'tree-item-light-badge';
             badge.textContent = obj.lightType;
+            left.appendChild(badge);
+        }
+        if (obj.isTilemap) {
+            const badge = document.createElement('span');
+            badge.className = 'tree-item-light-badge';
+            badge.style.background = 'rgba(74,222,128,0.12)';
+            badge.style.color = '#4ade80';
+            badge.style.borderColor = 'rgba(74,222,128,0.3)';
+            badge.textContent = `${obj.tilemapData.cols}×${obj.tilemapData.rows}`;
             left.appendChild(badge);
         }
         item.appendChild(left);
@@ -457,14 +494,15 @@ export function refreshAssetPanel() {
 }
 
 function _showAudioInspector(asset) {
-    // Show basic audio info in a toast/status bar
-    const bar = document.getElementById('audio-inspector-bar');
-    if (!bar) return;
-    bar.innerHTML = `
-        <span style="color:#aaa; margin-right:8px;">🎵 ${asset.name}</span>
-        <button onclick="this.parentElement.style.display='none'" style="background:none;border:none;color:#666;cursor:pointer;font-size:12px;">✕</button>
-    `;
-    bar.style.display = 'flex';
+    // Show a toast notification since audio-inspector-bar is removed
+    const existing = document.getElementById('audio-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.id = 'audio-toast';
+    toast.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#1a1a24;border:1px solid #3a3a48;color:#d8d8e8;border-radius:6px;padding:8px 16px;font-size:11px;z-index:9999;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(0,0,0,0.6);';
+    toast.innerHTML = `<svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:#3A72A5;stroke-width:2;flex-shrink:0;"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span>${asset.name}</span><button onclick="document.getElementById('audio-toast')?.remove()" style="background:none;border:none;color:#666;cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button>`;
+    document.body.appendChild(toast);
+    setTimeout(() => toast?.remove(), 3000);
 }
 
 // ── Prefab Panel ──────────────────────────────────────────────

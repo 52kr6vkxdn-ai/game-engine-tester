@@ -138,6 +138,12 @@ function _saveActiveScene() {
                     lightProps: JSON.parse(JSON.stringify(obj.lightProps)),
                 };
             }
+            if (obj.isTilemap) {
+                return {
+                    isTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                    tilemapData: { ...obj.tilemapData, tiles: Array.from(obj.tilemapData.tiles) },
+                };
+            }
             return {
                 label: obj.label, isImage: obj.isImage, assetId: obj.assetId,
                 prefabId: obj.prefabId || null,

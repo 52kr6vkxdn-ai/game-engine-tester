@@ -95,6 +95,12 @@ function _saveCurrentScene() {
                 lightProps: JSON.parse(JSON.stringify(obj.lightProps)),
             };
         }
+        if (obj.isTilemap) {
+            return {
+                isTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                tilemapData: { ...obj.tilemapData, tiles: Array.from(obj.tilemapData.tiles) },
+            };
+        }
         return {
             label: obj.label, isImage: obj.isImage, assetId: obj.assetId,
             prefabId: obj.prefabId || null,
@@ -152,6 +158,9 @@ function _loadScene(index) {
                     obj.lightProps = JSON.parse(JSON.stringify(s.lightProps));
                     _buildLightHelper(obj);
                 });
+            }
+            if (s.isTilemap) {
+                return import('./engine.tilemap.js').then(({ restoreTilemap }) => restoreTilemap(s));
             }
             return import('./engine.objects.js').then(({ createImageObject }) => {
                 if (!s.isImage || !s.assetId) return;

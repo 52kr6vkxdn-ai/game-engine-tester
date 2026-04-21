@@ -103,11 +103,17 @@ export function selectObject(obj) {
         state._gizmoHandles  = obj._gizmoHandles;
         state.spriteBox      = obj.spriteGraphic || null;
 
-        if (obj._grpTranslate && !obj.isLight) {
-            const m = state.gizmoMode || 'translate';
-            obj._grpTranslate.visible = m === 'translate' || m === 'all';
-            obj._grpRotate.visible    = m === 'rotate'    || m === 'all';
-            obj._grpScale.visible     = m === 'scale'     || m === 'all';
+        if (obj._grpTranslate) {
+            if (obj.isLight) {
+                obj._grpTranslate.visible = true;
+                obj._grpRotate.visible    = false;
+                obj._grpScale.visible     = false;
+            } else {
+                const m = state.gizmoMode || 'translate';
+                obj._grpTranslate.visible = m === 'translate' || m === 'all';
+                obj._grpRotate.visible    = m === 'rotate'    || m === 'all';
+                obj._grpScale.visible     = m === 'scale'     || m === 'all';
+            }
         }
     }
 
