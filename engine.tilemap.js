@@ -49,11 +49,12 @@ export function createTilemap(x = 0, y = 0) {
     state.gameObjects.push(container);
 
     container.eventMode = 'static';
+    container.cursor = 'pointer';
     container.on('pointerdown', e => {
         if (state.isPlaying) { e.stopPropagation(); return; }
         if (e.button !== 0) return;
         import('./engine.objects.js').then(m => m.selectObject(container));
-        e.stopPropagation();
+        // Do NOT stopPropagation — let gizmo handles on top receive events
     });
 
     import('./engine.objects.js').then(m => m.selectObject(container));
@@ -92,6 +93,8 @@ export function _buildTilemapHelper(container) {
 
     container._tilemapHelper = g;
     container.addChildAt(g, 0);
+    // Non-interactive: let the container and gizmo handles above receive events
+    g.eventMode = 'none';
 }
 
 // ── Rebuild tile sprites from data ───────────────────────────
@@ -613,6 +616,9 @@ function _attachTranslateGizmo(container) {
     container._grpTranslate = grpT; container._grpRotate = grpR; container._grpScale = grpS;
     gizmoContainer.addChild(grpT, grpR, grpS);
     container._gizmoHandles = { transX:g1, transY:g2, transCenter:g3, scaleX:g1, scaleY:g2, scaleCenter:g3, rotRing:g3 };
+
+    // Stop propagation so the container's broad pointerdown doesn't also fire on a gizmo drag
+    [g1, g2, g3].forEach(h => h.on('pointerdown', e => e.stopPropagation()));
 }
 function _makeAxisLine(color, len, isY) {
     const g = new PIXI.Graphics();

@@ -22,9 +22,9 @@ export function defaultLightProps(type) {
     };
     switch (type) {
         case 'point':
-            return { ...base, radius: 200, falloff: 2.0 };
+            return { ...base, radius: 200, falloff: 2.0, castShadows: false };
         case 'spot':
-            return { ...base, radius: 250, angle: 45, falloff: 1.8, direction: 0 };
+            return { ...base, radius: 250, angle: 45, falloff: 1.8, direction: 0, castShadows: false };
         case 'directional':
             return { ...base, angle: 0, softness: 0.3 };
         case 'area':
@@ -215,25 +215,27 @@ function _attachTranslateGizmo(container) {
         rotRing: transCenter,
     };
 
-    const m = state.gizmoMode || 'translate';
+    // Stop propagation on each handle so the container's broad pointerdown
+    // doesn't fire simultaneously with a gizmo drag start.
+    [transX, transY, transCenter].forEach(h => {
+        h.on('pointerdown', e => e.stopPropagation());
+    });
+
+    container.cursor = 'pointer';
     grpTranslate.visible = true; // lights always show translate
 }
 
 function _makeLightSelectable(container) {
     container.eventMode = 'static';
-    container._lightHelper.eventMode = 'static';
-    container._lightHelper.cursor = 'pointer';
+    // Keep helper non-interactive so gizmo handles (which sit on top) receive events.
+    // The container itself catches clicks that miss the gizmo handles.
+    container._lightHelper.eventMode = 'none';
 
     container.on('pointerdown', (e) => {
         if (state.isPlaying) { e.stopPropagation(); return; }
         if (e.button !== 0) return;
         import('./engine.objects.js').then(m => m.selectObject(container));
-        e.stopPropagation();
-    });
-    container._lightHelper.on('pointerdown', (e) => {
-        if (state.isPlaying) { e.stopPropagation(); return; }
-        import('./engine.objects.js').then(m => m.selectObject(container));
-        e.stopPropagation();
+        // Do NOT stopPropagation here — let the gizmo handles fire if hit
     });
 }
 
@@ -302,6 +304,206 @@ function _onLightingResize() {
     const h = Math.max(1, app.screen.height);
     state.lightingMaskRT.resize(w, h);
     state.lightingGlowRT.resize(w, h);
+    // Resize shadow canvas too
+    if (state._shadowCanvas) {
+        state._shadowCanvas.width  = w;
+        state._shadowCanvas.height = h;
+    }
+}
+
+// ── Shadow canvas (2D, CPU ray-cast) ──────────────────────────
+function _ensureShadowCanvas() {
+    if (state._shadowCanvas) return;
+    const c = document.createElement('canvas');
+    c.width  = Math.max(1, state.app.screen.width);
+    c.height = Math.max(1, state.app.screen.height);
+    state._shadowCanvas = c;
+    state._shadowCtx    = c.getContext('2d');
+    // PIXI texture that wraps the canvas — updated each frame
+    state._shadowTex    = PIXI.Texture.from(c);
+    state._shadowSprite = new PIXI.Sprite(state._shadowTex);
+    state._shadowSprite.blendMode = PIXI.BLEND_MODES.MULTIPLY;
+    state._shadowSprite.eventMode = 'none';
+    // Insert between the mask and glow sprites
+    const idx = state.app.stage.children.indexOf(state.lightingGlowSprite);
+    state.app.stage.addChildAt(state._shadowSprite, idx);
+}
+
+// ── Collect occluder AABBs in screen space ────────────────────
+function _getOccluders() {
+    const sc = state.sceneContainer;
+    const occluders = [];
+    for (const obj of state.gameObjects) {
+        if (obj.isLight) continue;
+        if (obj.lightProps?.castsShadow === false) continue; // explicit opt-out
+        // Only sprite objects cast shadows (tilemaps can opt in too)
+        if (!obj.isImage && !obj.isTilemap) continue;
+
+        try {
+            const b = obj.getBounds(); // screen-space AABB
+            if (b.width < 2 || b.height < 2) continue;
+            occluders.push({
+                x: b.x, y: b.y, w: b.width, h: b.height,
+                // 4 corner points for the AABB
+                corners: [
+                    { x: b.x,          y: b.y },
+                    { x: b.x + b.width,y: b.y },
+                    { x: b.x + b.width,y: b.y + b.height },
+                    { x: b.x,          y: b.y + b.height },
+                ],
+                // 4 segments
+                segments: [
+                    [{ x: b.x,          y: b.y },          { x: b.x + b.width, y: b.y }],
+                    [{ x: b.x + b.width,y: b.y },          { x: b.x + b.width, y: b.y + b.height }],
+                    [{ x: b.x + b.width,y: b.y + b.height },{ x: b.x,          y: b.y + b.height }],
+                    [{ x: b.x,          y: b.y + b.height },{ x: b.x,          y: b.y }],
+                ],
+            });
+        } catch (_) {}
+    }
+    return occluders;
+}
+
+// ── Ray-segment intersection (returns t along ray, or Infinity) ─
+function _raySegIntersect(ox, oy, dx, dy, ax, ay, bx, by) {
+    const r_dx = dx, r_dy = dy;
+    const s_dx = bx - ax, s_dy = by - ay;
+    const denom = r_dx * s_dy - r_dy * s_dx;
+    if (Math.abs(denom) < 1e-10) return Infinity;
+    const t = ((ax - ox) * s_dy - (ay - oy) * s_dx) / denom;
+    const u = ((ax - ox) * r_dy - (ay - oy) * r_dx) / denom;
+    if (t >= 0 && u >= 0 && u <= 1) return t;
+    return Infinity;
+}
+
+// ── Build visibility polygon for one light ────────────────────
+function _buildVisibilityPolygon(lx, ly, radius, occluders, screenW, screenH) {
+    // Boundary segments (screen edges, slightly padded)
+    const pad = 2;
+    const boundary = [
+        [{ x: -pad,     y: -pad      }, { x: screenW+pad, y: -pad       }],
+        [{ x: screenW+pad,y: -pad    }, { x: screenW+pad,  y: screenH+pad}],
+        [{ x: screenW+pad,y:screenH+pad},{ x: -pad,        y: screenH+pad}],
+        [{ x: -pad,     y:screenH+pad}, { x: -pad,         y: -pad       }],
+    ];
+
+    const allSegs = [
+        ...boundary,
+        ...occluders.flatMap(o => o.segments),
+    ];
+
+    // Unique angles to cast rays toward — occluder corners + tiny offsets
+    const angles = new Set();
+    const boundaryCorners = [
+        { x: -pad, y: -pad }, { x: screenW+pad, y: -pad },
+        { x: screenW+pad, y: screenH+pad }, { x: -pad, y: screenH+pad },
+    ];
+    const allCorners = [
+        ...boundaryCorners,
+        ...occluders.flatMap(o => o.corners),
+    ];
+
+    for (const c of allCorners) {
+        const a = Math.atan2(c.y - ly, c.x - lx);
+        angles.add(a - 0.0001);
+        angles.add(a);
+        angles.add(a + 0.0001);
+    }
+
+    // Cast each ray, find closest intersection
+    const hits = [];
+    for (const angle of angles) {
+        const dx = Math.cos(angle);
+        const dy = Math.sin(angle);
+
+        let minT = Infinity;
+        for (const seg of allSegs) {
+            const t = _raySegIntersect(lx, ly, dx, dy, seg[0].x, seg[0].y, seg[1].x, seg[1].y);
+            if (t < minT) minT = t;
+        }
+        if (minT === Infinity) minT = radius * 2;
+        // Clamp to radius
+        const clampedT = Math.min(minT, radius);
+        hits.push({ angle, x: lx + dx * clampedT, y: ly + dy * clampedT });
+    }
+
+    // Sort by angle
+    hits.sort((a, b) => a.angle - b.angle);
+    return hits;
+}
+
+// ── Draw shadow layer for one frame ──────────────────────────
+function _renderShadowFrame(lights, occluders) {
+    _ensureShadowCanvas();
+    const c    = state._shadowCanvas;
+    const ctx  = state._shadowCtx;
+    const w    = c.width;
+    const h    = c.height;
+
+    // Start fully lit (white = no darkening in MULTIPLY)
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+
+    const shadowCasters = lights.filter(L =>
+        L.lightProps?.castShadows &&
+        (L.lightType === 'point' || L.lightType === 'spot') &&
+        L.lightProps?.enabled
+    );
+
+    if (!shadowCasters.length) {
+        // No shadow lights — leave canvas white (neutral MULTIPLY)
+        state._shadowSprite.visible = false;
+        state._shadowTex.update();
+        return;
+    }
+    state._shadowSprite.visible = true;
+
+    for (const L of shadowCasters) {
+        const p   = L.lightProps;
+        const pos = state.sceneContainer.toGlobal(new PIXI.Point(L.x, L.y));
+        const lx  = pos.x, ly = pos.y;
+        const camScale = state.sceneContainer.scale.x;
+        const radius   = (p.radius ?? 200) * camScale;
+
+        // Darken area within radius to shadow-gray, lit polygon will restore it
+        // Use a clipping/compositing trick:
+        // 1. Draw dark circle (shadow zone) with destination-in or manual polygon
+
+        const poly = _buildVisibilityPolygon(lx, ly, radius, occluders, w, h);
+        if (poly.length < 3) continue;
+
+        // Save state
+        ctx.save();
+
+        // Draw the dark falloff disk first (this is the "shadow zone")
+        // We darken everything within radius, then cut out the lit polygon
+        const grd = ctx.createRadialGradient(lx, ly, 0, lx, ly, radius);
+        grd.addColorStop(0,   'rgba(0,0,0,0.72)');
+        grd.addColorStop(0.6, 'rgba(0,0,0,0.55)');
+        grd.addColorStop(1,   'rgba(0,0,0,0)');
+        ctx.beginPath();
+        ctx.arc(lx, ly, radius, 0, Math.PI * 2);
+        ctx.fillStyle = grd;
+        ctx.fill();
+
+        // Now cut out the visibility polygon using destination-out on a temp layer
+        // i.e. draw lit area brighter: paint white polygon on top (restores white = lit)
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = 'rgba(0,0,0,0.72)'; // match the center shadow strength
+
+        // Lit polygon
+        ctx.beginPath();
+        ctx.moveTo(poly[0].x, poly[0].y);
+        for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    // Push updated pixels to PIXI texture
+    state._shadowTex.update();
 }
 
 function _renderLightingFrame() {
@@ -314,6 +516,7 @@ function _renderLightingFrame() {
     if (!lights.length) {
         state.lightingMaskSprite.visible = false;
         state.lightingGlowSprite.visible = false;
+        if (state._shadowSprite) state._shadowSprite.visible = false;
         return;
     }
     state.lightingMaskSprite.visible = true;
@@ -344,6 +547,10 @@ function _renderLightingFrame() {
         if (s) scratch.addChild(s);
     }
     app.renderer.render(scratch, { renderTexture: state.lightingGlowRT, clear: true });
+
+    // ── Pass 3: shadows (MULTIPLY canvas overlay) ─────────
+    const occluders = _getOccluders();
+    _renderShadowFrame(lights, occluders);
 }
 
 function _buildLightContribution(L, forGlow) {
@@ -550,6 +757,10 @@ export function buildLightInspectorHTML(obj) {
             <span class="prop-label">Falloff</span>
             <input type="range" id="li-falloff" min="0.5" max="5" step="0.1" value="${p.falloff}" class="light-slider">
             <span id="li-falloff-val" class="prop-val">${p.falloff.toFixed(1)}</span>
+        </div>
+        <div class="prop-row" style="margin-top:4px;">
+            <span class="prop-label">Cast Shadows</span>
+            <input type="checkbox" id="li-cast-shadows" ${p.castShadows ? 'checked' : ''} style="accent-color:#facc15;width:14px;height:14px;">
         </div>`;
     } else if (type === 'spot') {
         typeSpecific = `
@@ -572,6 +783,10 @@ export function buildLightInspectorHTML(obj) {
             <span class="prop-label">Falloff</span>
             <input type="range" id="li-falloff" min="0.5" max="5" step="0.1" value="${p.falloff}" class="light-slider">
             <span id="li-falloff-val" class="prop-val">${p.falloff.toFixed(1)}</span>
+        </div>
+        <div class="prop-row" style="margin-top:4px;">
+            <span class="prop-label">Cast Shadows</span>
+            <input type="checkbox" id="li-cast-shadows" ${p.castShadows ? 'checked' : ''} style="accent-color:#facc15;width:14px;height:14px;">
         </div>`;
     } else if (type === 'directional') {
         typeSpecific = `
@@ -656,6 +871,9 @@ export function bindLightInspector(obj) {
         if (obj._lightHelper) obj._lightHelper.alpha = p.enabled ? 1 : 0.3;
     });
 
+    const cs = document.getElementById('li-cast-shadows');
+    if (cs) cs.addEventListener('change', () => { p.castShadows = cs.checked; });
+
     bind('li-intensity', 'intensity', parseFloat, 'li-intensity-val', v => v.toFixed(2));
     bind('li-radius',    'radius',    parseFloat, 'li-radius-val',    v => v + 'px');
     bind('li-angle',     'angle',     parseFloat, 'li-angle-val',     v => v + '°');
@@ -680,6 +898,11 @@ export async function restoreLight(s) {
     obj.label = s.label;
     obj.unityZ = s.unityZ || 0;
     obj.lightProps = JSON.parse(JSON.stringify(s.lightProps));
+    // Ensure castShadows default exists for older snapshots
+    if (obj.lightProps.castShadows === undefined &&
+        (s.lightType === 'point' || s.lightType === 'spot')) {
+        obj.lightProps.castShadows = false;
+    }
     _buildLightHelper(obj);
     return obj;
 }

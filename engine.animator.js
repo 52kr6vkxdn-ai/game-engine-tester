@@ -261,10 +261,15 @@ function _wire(modal, obj) {
     let playInterval  = null;
     let currentFrame  = 0;
     let isPlaying     = false;
+    let _dirty        = false;  // tracks whether any animation changes were made
 
     // ── Close ───────────────────────────────────────────────
     modal.querySelector('#anim-close-btn').addEventListener('click', () => {
-        _stopPreview(obj);
+        _stopPlay();
+        // Ask about prefab sync once on close, only if something changed
+        if (_dirty && obj?.prefabId) {
+            _askPrefabSyncOnClose(obj);
+        }
         modal.remove();
     });
 
@@ -299,6 +304,7 @@ function _wire(modal, obj) {
             await _loadZip(zip, anim);
         }
 
+        _dirty = true;
         e.target.value = '';
         _renderFrameStrip(modal, obj);
         _renderPreviewCanvas(modal, obj);
@@ -314,18 +320,19 @@ function _wire(modal, obj) {
         obj.animations.push(anim);
         obj.activeAnimIndex = obj.animations.length - 1;
         currentFrame = 0;
+        _dirty = true;
         _renderAnimList(modal, obj);
         _renderFrameStrip(modal, obj);
         _renderPreviewCanvas(modal, obj);
         _updateSettings(modal, obj);
         _updateStats(modal, obj);
-        _askPrefabSync(obj, 'Animation added');
+        // No mid-session popup — user will be asked on close if needed
     });
 
     // ── Settings: name ──────────────────────────────────────
     modal.querySelector('#anim-name-input').addEventListener('input', (e) => {
         const anim = _currentAnim(obj);
-        if (anim) { anim.name = e.target.value; _renderAnimList(modal, obj); }
+        if (anim) { anim.name = e.target.value; _dirty = true; _renderAnimList(modal, obj); }
     });
 
     // ── Settings: fps ───────────────────────────────────────
@@ -336,6 +343,7 @@ function _wire(modal, obj) {
         fpsValue.textContent = fpsSlider.value;
         if (anim) {
             anim.fps = parseInt(fpsSlider.value);
+            _dirty = true;
             _updateStats(modal, obj);
             if (isPlaying) { _stopPlay(); _startPlay(); }
         }
@@ -344,7 +352,7 @@ function _wire(modal, obj) {
     // ── Settings: loop ──────────────────────────────────────
     modal.querySelector('#anim-loop-check').addEventListener('change', (e) => {
         const anim = _currentAnim(obj);
-        if (anim) anim.loop = e.target.checked;
+        if (anim) { anim.loop = e.target.checked; _dirty = true; }
     });
 
     // ── Delete animation ─────────────────────────────────────
@@ -356,7 +364,7 @@ function _wire(modal, obj) {
                 _showToast(modal, '⚠ Cannot delete the Idle animation');
                 return;
             }
-            if (anim) anim.frames = [];
+            if (anim) { anim.frames = []; _dirty = true; }
         } else {
             const anim = _currentAnim(obj);
             if (anim?.isIdle) {
@@ -365,7 +373,8 @@ function _wire(modal, obj) {
             }
             obj.animations.splice(obj.activeAnimIndex, 1);
             obj.activeAnimIndex = Math.max(0, obj.activeAnimIndex - 1);
-            _askPrefabSync(obj, 'Animation removed');
+            _dirty = true;
+            // No mid-session popup — user will be asked on close if needed
         }
         currentFrame = 0;
         _renderAnimList(modal, obj);
@@ -378,6 +387,7 @@ function _wire(modal, obj) {
     // ── Apply to object ──────────────────────────────────────
     modal.querySelector('#anim-apply-btn').addEventListener('click', () => {
         _applyAnimToObject(obj);
+        _dirty = true;
         _showToast(modal, 'Animation applied ✔');
     });
 
@@ -432,7 +442,11 @@ function _wire(modal, obj) {
     // ── Keyboard shortcuts ───────────────────────────────────
     modal._keyHandler = (e) => {
         if (e.target.tagName === 'INPUT') return;
-        if (e.key === 'Escape') { _stopPlay(); modal.remove(); }
+        if (e.key === 'Escape') {
+            _stopPlay();
+            if (_dirty && obj?.prefabId) _askPrefabSyncOnClose(obj);
+            modal.remove();
+        }
         if (e.key === ' ')      { e.preventDefault(); isPlaying ? _stopPlay() : _startPlay(); }
         if (e.key === 'ArrowLeft')  { _stopPlay(); prevBtn.click(); }
         if (e.key === 'ArrowRight') { _stopPlay(); nextBtn.click(); }
@@ -809,13 +823,12 @@ function _showGlobalToast(msg) {
     setTimeout(() => t.remove(), 3000);
 }
 
-// ── Ask user to sync prefab when animation added/removed ─────
-function _askPrefabSync(obj, changeDesc) {
+// ── Ask prefab sync once, on close, only if changes were made ─
+function _askPrefabSyncOnClose(obj) {
     if (!obj?.prefabId) return;
     const prefab = (window._zState?.prefabs ?? []).find(p => p.id === obj.prefabId);
     if (!prefab) return;
 
-    // Show a non-blocking popup (not confirm — use custom overlay)
     const overlay = document.createElement('div');
     overlay.style.cssText = `
         position:fixed; inset:0; z-index:20000; background:rgba(0,0,0,0.6);
@@ -829,8 +842,8 @@ function _askPrefabSync(obj, changeDesc) {
                 📦 Prefab: <span style="color:#9bc;">${prefab.name}</span>
             </div>
             <div style="color:#aaa; margin-bottom:18px;">
-                <strong style="color:#facc15;">${changeDesc}</strong> on a prefab instance.<br>
-                Do you want to propagate this to other instances?
+                You made animation changes on a prefab instance.<br>
+                Propagate these changes to other instances?
             </div>
             <div style="display:flex; gap:10px; justify-content:flex-end;">
                 <button id="ps-this" style="background:#1e2535; border:1px solid #445; color:#aaa; border-radius:4px; padding:7px 16px; cursor:pointer; font-size:11px;">This instance only</button>
