@@ -22,6 +22,7 @@ import { enterPlayMode, pausePlayMode, stopPlayMode, drawCameraBounds } from './
 import { saveProject, loadProject, newProject } from './engine.project.js';
 import { createLight, createFog, LIGHT_TYPES, initLighting, buildWorldLightingHTML, bindWorldLighting } from './engine.lights.js';
 import { createTilemap } from './engine.tilemap.js';
+import { createTerrain } from './engine.terrain.js';
 
 export function startEngine() {
     if (typeof PIXI === 'undefined') {
@@ -203,21 +204,6 @@ function initMenus() {
         });
     }
 
-    // Save as Prefab button
-    const prefabBtn = document.getElementById('btn-save-prefab');
-    if (prefabBtn) {
-        prefabBtn.addEventListener('click', () => {
-            if (!state.gameObject) return;
-            import('./engine.prefabs.js').then(m => {
-                const prefab = m.saveAsPrefab(state.gameObject);
-                if (prefab) {
-                    syncPixiToInspector();
-                    document.getElementById('tab-prefabs-btn')?.click();
-                }
-            });
-        });
-    }
-
     // Apply to THIS prefab template only (new Unity-style button)
     const applyThisBtn = document.getElementById('btn-prefab-apply-this');
     if (applyThisBtn) {
@@ -302,6 +288,10 @@ function initMenus() {
                 {
                     label: '▦  Tilemap',
                     action: () => createTilemap(),
+                },
+                {
+                    label: '⛰  Terrain Brush',
+                    action: () => createTerrain(),
                 },
                 { separator: true },
                 { label: '── Effects ──', disabled: true },
@@ -429,6 +419,18 @@ function _copySelected() {
             label: obj.label, x: obj.x + 25, y: obj.y + 25, unityZ: obj.unityZ || 0,
             lightProps: JSON.parse(JSON.stringify(obj.lightProps)),
         };
+    } else if (obj.isFog) {
+        state.clipboard = {
+            isFog: true,
+            label: obj.label, x: obj.x + 25, y: obj.y + 25, unityZ: obj.unityZ || 0,
+            fogProps: JSON.parse(JSON.stringify(obj.fogProps)),
+        };
+    } else if (obj.isTerrain) {
+        state.clipboard = {
+            isTerrain: true,
+            label: obj.label, x: obj.x + 25, y: obj.y + 25, unityZ: obj.unityZ || 0,
+            terrainData: { ...obj.terrainData, tiles: Array.from(obj.terrainData.tiles), images: obj.terrainData.images.slice() },
+        };
     } else if (obj.isTilemap) {
         state.clipboard = {
             isTilemap: true,
@@ -472,6 +474,18 @@ function _pasteObject() {
     if (cb.isTilemap) {
         import('./engine.tilemap.js').then(({ restoreTilemap }) => {
             restoreTilemap({ ...cb }).then(obj => {
+                if (!obj) return;
+                obj.label = cb.label + ' (copy)';
+                state.clipboard = { ...cb, x: cb.x + 25, y: cb.y + 25 };
+                _logConsole('⎗ Pasted: ' + obj.label, '#8f8');
+            });
+        });
+        return;
+    }
+    // Terrain paste
+    if (cb.isTerrain) {
+        import('./engine.terrain.js').then(({ restoreTerrain }) => {
+            restoreTerrain({ ...cb }).then(obj => {
                 if (!obj) return;
                 obj.label = cb.label + ' (copy)';
                 state.clipboard = { ...cb, x: cb.x + 25, y: cb.y + 25 };

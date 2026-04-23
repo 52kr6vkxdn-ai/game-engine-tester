@@ -101,6 +101,12 @@ function _saveCurrentScene() {
                 fogProps: JSON.parse(JSON.stringify(obj.fogProps)),
             };
         }
+        if (obj.isTerrain) {
+            return {
+                isTerrain: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                terrainData: { ...obj.terrainData, tiles: Array.from(obj.terrainData.tiles), images: obj.terrainData.images.slice() },
+            };
+        }
         if (obj.isTilemap) {
             return {
                 isTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
@@ -172,6 +178,9 @@ function _loadScene(index) {
                     obj.label = s.label; obj.unityZ = s.unityZ || 0;
                     obj.fogProps = JSON.parse(JSON.stringify(s.fogProps));
                 });
+            }
+            if (s.isTerrain) {
+                return import('./engine.terrain.js').then(({ restoreTerrain }) => restoreTerrain(s));
             }
             if (s.isTilemap) {
                 return import('./engine.tilemap.js').then(({ restoreTilemap }) => restoreTilemap(s));

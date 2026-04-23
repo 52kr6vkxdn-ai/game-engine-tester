@@ -239,6 +239,7 @@ function _hideAllGizmosAndGrid() {
         if (obj.isLight && obj._lightHelper) obj._lightHelper.visible = false;
         if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = false;
         if (obj.isFog && obj._fogHelper) obj._fogHelper.visible = false;
+        if (obj.isTerrain && obj._terrainHelper) obj._terrainHelper.visible = false;
     });
     if (state.gridGraphics) state.gridGraphics.visible = false;
     if (state.spriteBox)    state.spriteBox.visible    = false;
@@ -330,6 +331,12 @@ function _snapshotScene() {
                     fogProps: JSON.parse(JSON.stringify(obj.fogProps)),
                 };
             }
+            if (obj.isTerrain) {
+                return {
+                    isTerrain: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                    terrainData: { ...obj.terrainData, tiles: Array.from(obj.terrainData.tiles), images: obj.terrainData.images.slice() },
+                };
+            }
             if (obj.isTilemap) {
                 return {
                     isTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
@@ -381,6 +388,9 @@ function _restoreScene(snap) {
                 obj.fogProps = JSON.parse(JSON.stringify(s.fogProps));
                 return obj;
             });
+        }
+        if (s.isTerrain) {
+            return import('./engine.terrain.js').then(({ restoreTerrain }) => restoreTerrain(s));
         }
         if (s.isTilemap) {
             return import('./engine.tilemap.js').then(({ restoreTilemap }) => restoreTilemap(s));
@@ -447,6 +457,7 @@ export function stopRuntimeAnimations() {
         if (obj.isLight && obj._lightHelper) obj._lightHelper.visible = true;
         if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = true;
         if (obj.isFog && obj._fogHelper) obj._fogHelper.visible = true;
+        if (obj.isTerrain && obj._terrainHelper) obj._terrainHelper.visible = true;
     }
 }
 

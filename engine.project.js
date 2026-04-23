@@ -144,6 +144,12 @@ function _saveActiveScene() {
                     fogProps: JSON.parse(JSON.stringify(obj.fogProps)),
                 };
             }
+            if (obj.isTerrain) {
+                return {
+                    isTerrain: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                    terrainData: { ...obj.terrainData, tiles: Array.from(obj.terrainData.tiles), images: obj.terrainData.images.slice() },
+                };
+            }
             if (obj.isTilemap) {
                 return {
                     isTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
