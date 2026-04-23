@@ -101,6 +101,13 @@ function _saveCurrentScene() {
                 tilemapData: { ...obj.tilemapData, tiles: Array.from(obj.tilemapData.tiles) },
             };
         }
+        if (obj.isAutoTilemap) {
+            const td = obj.autoTileData;
+            return {
+                isAutoTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                autoTileData: { ...td, cells: Array.from(td.cells), brushList: td.brushList.slice() },
+            };
+        }
         return {
             label: obj.label, isImage: obj.isImage, assetId: obj.assetId,
             prefabId: obj.prefabId || null,
@@ -161,6 +168,9 @@ function _loadScene(index) {
             }
             if (s.isTilemap) {
                 return import('./engine.tilemap.js').then(({ restoreTilemap }) => restoreTilemap(s));
+            }
+            if (s.isAutoTilemap) {
+                return import('./engine.autotile.js').then(({ restoreAutoTilemap }) => restoreAutoTilemap(s));
             }
             return import('./engine.objects.js').then(({ createImageObject }) => {
                 if (!s.isImage || !s.assetId) return;

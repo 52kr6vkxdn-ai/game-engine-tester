@@ -22,6 +22,7 @@ import { enterPlayMode, pausePlayMode, stopPlayMode, drawCameraBounds } from './
 import { saveProject, loadProject, newProject } from './engine.project.js';
 import { createLight, LIGHT_TYPES, initLighting } from './engine.lights.js';
 import { createTilemap } from './engine.tilemap.js';
+import { createAutoTilemap } from './engine.autotile.js';
 
 export function startEngine() {
     if (typeof PIXI === 'undefined') {
@@ -276,6 +277,10 @@ function initMenus() {
                     label: '▦  Tilemap',
                     action: () => createTilemap(),
                 },
+                {
+                    label: '▣  Auto Tilemap',
+                    action: () => createAutoTilemap(),
+                },
             ]);
         });
     }
@@ -402,6 +407,13 @@ function _copySelected() {
             label: obj.label, x: obj.x + 25, y: obj.y + 25, unityZ: obj.unityZ || 0,
             tilemapData: { ...obj.tilemapData, tiles: Array.from(obj.tilemapData.tiles) },
         };
+    } else if (obj.isAutoTilemap) {
+        const td = obj.autoTileData;
+        state.clipboard = {
+            isAutoTilemap: true,
+            label: obj.label, x: obj.x + 25, y: obj.y + 25, unityZ: obj.unityZ || 0,
+            autoTileData: { ...td, cells: Array.from(td.cells), brushList: td.brushList.slice() },
+        };
     } else {
         state.clipboard = {
             label: obj.label, isImage: obj.isImage, assetId: obj.assetId,
@@ -439,6 +451,18 @@ function _pasteObject() {
     if (cb.isTilemap) {
         import('./engine.tilemap.js').then(({ restoreTilemap }) => {
             restoreTilemap({ ...cb }).then(obj => {
+                if (!obj) return;
+                obj.label = cb.label + ' (copy)';
+                state.clipboard = { ...cb, x: cb.x + 25, y: cb.y + 25 };
+                _logConsole('⎗ Pasted: ' + obj.label, '#8f8');
+            });
+        });
+        return;
+    }
+    // Auto-Tilemap paste
+    if (cb.isAutoTilemap) {
+        import('./engine.autotile.js').then(({ restoreAutoTilemap }) => {
+            restoreAutoTilemap({ ...cb }).then(obj => {
                 if (!obj) return;
                 obj.label = cb.label + ' (copy)';
                 state.clipboard = { ...cb, x: cb.x + 25, y: cb.y + 25 };

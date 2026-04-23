@@ -18,6 +18,7 @@ export function saveProject() {
         name:        'ZengineProject',
         savedAt:     new Date().toISOString(),
         assets:      state.assets,
+        tilesetBrushes: state.tilesetBrushes,
         prefabs:     state.prefabs,
         scenes:      state.scenes,
         activeScene: state.activeSceneIndex,
@@ -71,6 +72,7 @@ export function newProject() {
     state.gameObject     = null;
     state.gizmoContainer = null;
     state.assets         = [];
+    state.tilesetBrushes = [];
     state.prefabs        = [];
     state.scenes         = [{ id: 'scene_1', name: 'Scene-1', snapshot: null }];
     state.activeSceneIndex = 0;
@@ -103,8 +105,9 @@ function _applyProject(project) {
     state.gizmoContainer = null;
 
     // Restore globals
-    state.assets   = project.assets  || [];
-    state.prefabs  = project.prefabs || [];
+    state.assets         = project.assets  || [];
+    state.tilesetBrushes = project.tilesetBrushes || [];
+    state.prefabs        = project.prefabs || [];
     state.scenes   = project.scenes  || [{ id: 'scene_1', name: 'Scene-1', snapshot: null }];
     state.activeSceneIndex = project.activeScene ?? 0;
 
@@ -142,6 +145,13 @@ function _saveActiveScene() {
                 return {
                     isTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
                     tilemapData: { ...obj.tilemapData, tiles: Array.from(obj.tilemapData.tiles) },
+                };
+            }
+            if (obj.isAutoTilemap) {
+                const td = obj.autoTileData;
+                return {
+                    isAutoTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                    autoTileData: { ...td, cells: Array.from(td.cells), brushList: td.brushList.slice() },
                 };
             }
             return {

@@ -92,6 +92,26 @@ export function syncPixiToInspector() {
         return;
     }
 
+    if (go.isAutoTilemap) {
+        const rotRow   = document.getElementById('transform-rot-row');
+        const scaleRow = document.getElementById('transform-scale-row');
+        if (rotRow)   rotRow.style.display   = 'none';
+        if (scaleRow) scaleRow.style.display = 'none';
+        if (spriteSection) spriteSection.style.display = 'none';
+        if (animSection)   animSection.style.display   = 'none';
+        if (pfSection)     pfSection.style.display      = 'none';
+        const lightMount = document.getElementById('light-inspector-mount');
+        if (lightMount) {
+            import('./engine.autotile.js').then(m => {
+                lightMount.innerHTML = m.buildAutoTileInspectorHTML(go);
+                document.getElementById('btn-open-autotile-editor')?.addEventListener('click', () => {
+                    m.openAutoTileEditor(go);
+                });
+            });
+        }
+        return;
+    }
+
     // Regular sprite object
     const rotRow   = document.getElementById('transform-rot-row');
     const scaleRow = document.getElementById('transform-scale-row');
@@ -157,7 +177,7 @@ export function syncInspectorToPixi() {
     go.unityZ = newZ;
 
     // Rotation and scale only for sprites (not lights or tilemaps)
-    if (!go.isLight && !go.isTilemap) {
+    if (!go.isLight && !go.isTilemap && !go.isAutoTilemap) {
         const newRot = (parseFloat(els.rz?.value) || 0) * -Math.PI / 180;
         const newSX  = parseFloat(els.sx?.value) || 1;
         const newSY  = parseFloat(els.sy?.value) || 1;
@@ -332,6 +352,12 @@ export function refreshHierarchy() {
             icon.style.cssText='width:14px;height:14px;fill:none;stroke:#4ade80;stroke-width:2;flex-shrink:0;';
             icon.innerHTML='<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>';
             left.appendChild(icon);
+        } else if (obj.isAutoTilemap) {
+            const icon = document.createElementNS('http://www.w3.org/2000/svg','svg');
+            icon.setAttribute('viewBox','0 0 24 24');
+            icon.style.cssText='width:14px;height:14px;fill:none;stroke:#4ade80;stroke-width:2;flex-shrink:0;';
+            icon.innerHTML='<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/><circle cx="12" cy="12" r="2" fill="#4ade80" stroke="none"/>';
+            left.appendChild(icon);
         } else {
             const idleAnim  = obj.animations?.find(a => a.isIdle) || obj.animations?.[obj.activeAnimIndex || 0];
             const idleFrame = idleAnim?.frames?.[0]?.dataURL;
@@ -362,6 +388,15 @@ export function refreshHierarchy() {
             badge.style.color = '#4ade80';
             badge.style.borderColor = 'rgba(74,222,128,0.3)';
             badge.textContent = `${obj.tilemapData.cols}×${obj.tilemapData.rows}`;
+            left.appendChild(badge);
+        }
+        if (obj.isAutoTilemap) {
+            const badge = document.createElement('span');
+            badge.className = 'tree-item-light-badge';
+            badge.style.background = 'rgba(74,222,128,0.12)';
+            badge.style.color = '#4ade80';
+            badge.style.borderColor = 'rgba(74,222,128,0.3)';
+            badge.textContent = `auto ${obj.autoTileData.cols}×${obj.autoTileData.rows}`;
             left.appendChild(badge);
         }
         item.appendChild(left);

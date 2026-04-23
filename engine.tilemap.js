@@ -1,16 +1,19 @@
 /* ============================================================
    Zengine — engine.tilemap.js
-   Tilemap editor: paint tiles from a tileset onto a grid.
-   
-   Data model on each tilemap object:
-     obj.isTilemap    = true
-     obj.tilemapData  = {
-       tileW: 32, tileH: 32,
-       cols: 20, rows: 15,
-       assetId: string|null,     // tileset image asset
-       tiles: Int32Array         // flat array cols*rows, -1 = empty
-       tilesetCols: number,      // how many tile columns in tileset
-       tilesetRows: number,
+   TILESET tilemap: paint individual tiles from a single sliced
+   image asset onto a grid.
+
+   For the auto-tiler (multi-image brush trainer) see
+   engine.autotile.js — that is an entirely separate system
+   with its own object type and editor UI.
+
+   Per-tilemap data:
+     obj.tilemapData = {
+       tileW, tileH, cols, rows,
+       assetId,                       // tileset image asset
+       tilesetCols, tilesetRows,
+       tiles:      Int32Array         // tile index per cell, -1 = empty
+       filterMode: 'pixelated'|'smooth'   // sharp pixel art vs curves
      }
    ============================================================ */
 
@@ -36,12 +39,10 @@ export function createTilemap(x = 0, y = 0) {
         assetId: null,
         tiles: new Int32Array(20 * 15).fill(-1),
         tilesetCols: 1, tilesetRows: 1,
+        filterMode: 'smooth',
     };
 
-    // Editor wireframe helper
     _buildTilemapHelper(container);
-
-    // Gizmo (translate only, like lights)
     _attachTranslateGizmo(container);
     if (state._bindGizmoHandles) state._bindGizmoHandles(container);
 
@@ -54,13 +55,16 @@ export function createTilemap(x = 0, y = 0) {
         if (state.isPlaying) { e.stopPropagation(); return; }
         if (e.button !== 0) return;
         import('./engine.objects.js').then(m => m.selectObject(container));
-        // Do NOT stopPropagation — let gizmo handles on top receive events
     });
 
     import('./engine.objects.js').then(m => m.selectObject(container));
     import('./engine.ui.js').then(m => m.refreshHierarchy());
 
     return container;
+}
+
+function _migrate(d) {
+    if (!d.filterMode) d.filterMode = 'smooth';
 }
 
 // ── Build editor wireframe ────────────────────────────────────
@@ -74,38 +78,32 @@ export function _buildTilemapHelper(container) {
     const W = d.cols * d.tileW;
     const H = d.rows * d.tileH;
 
-    // Filled background
     g.beginFill(0x1a2535, 0.6); g.drawRect(0, 0, W, H); g.endFill();
-    // Grid lines
     g.lineStyle(1, 0x3A72A5, 0.25);
     for (let c = 0; c <= d.cols; c++) { g.moveTo(c * d.tileW, 0); g.lineTo(c * d.tileW, H); }
     for (let r = 0; r <= d.rows; r++) { g.moveTo(0, r * d.tileH); g.lineTo(W, r * d.tileH); }
-    // Border
     g.lineStyle(2, 0x3A72A5, 0.7);
     g.drawRect(0, 0, W, H);
-    // Label
     const text = new PIXI.Text('TILEMAP', {
-        fontFamily: 'monospace', fontSize: 10,
-        fill: 0x3A72A5, alpha: 0.5,
+        fontFamily: 'monospace', fontSize: 10, fill: 0x3A72A5, alpha: 0.5,
     });
     text.x = 4; text.y = 4;
     g.addChild(text);
 
     container._tilemapHelper = g;
     container.addChildAt(g, 0);
-    // Non-interactive: let the container and gizmo handles above receive events
     g.eventMode = 'none';
 }
 
 // ── Rebuild tile sprites from data ───────────────────────────
 export function rebuildTilemapSprites(container) {
-    // Remove old tile sprites
     if (container._tileContainer) {
         container.removeChild(container._tileContainer);
         try { container._tileContainer.destroy({ children: true }); } catch(_) {}
     }
 
     const d = container.tilemapData;
+    _migrate(d);
     if (!d.assetId) return;
 
     const asset = state.assets.find(a => a.id === d.assetId);
@@ -113,6 +111,10 @@ export function rebuildTilemapSprites(container) {
 
     const baseTex = PIXI.Texture.from(asset.dataURL);
     if (!baseTex.valid) { baseTex.on('loaded', () => rebuildTilemapSprites(container)); return; }
+    if (baseTex.baseTexture) {
+        baseTex.baseTexture.scaleMode = (d.filterMode === 'pixelated')
+            ? PIXI.SCALE_MODES.NEAREST : PIXI.SCALE_MODES.LINEAR;
+    }
 
     const tw = d.tileW, th = d.tileH;
     const tileContainer = new PIXI.Container();
@@ -135,7 +137,6 @@ export function rebuildTilemapSprites(container) {
     }
 
     container._tileContainer = tileContainer;
-    // Insert before gizmo container
     const gizmoIdx = container.children.indexOf(container._gizmoContainer);
     if (gizmoIdx >= 0) container.addChildAt(tileContainer, gizmoIdx);
     else container.addChild(tileContainer);
@@ -144,6 +145,7 @@ export function rebuildTilemapSprites(container) {
 // ── Open the tilemap editor panel ────────────────────────────
 export function openTilemapEditor(obj) {
     document.getElementById('tm-editor')?.remove();
+    _migrate(obj.tilemapData);
 
     const panel = document.createElement('div');
     panel.id = 'tm-editor';
@@ -160,7 +162,6 @@ export function openTilemapEditor(obj) {
       <!-- Left: Tileset + tools -->
       <div style="width:260px;flex-shrink:0;background:#1a1a24;border-right:1px solid #2e2e3a;
                   display:flex;flex-direction:column;overflow:hidden;">
-        <!-- Header -->
         <div style="padding:12px 14px;border-bottom:1px solid #2e2e3a;display:flex;align-items:center;gap:8px;flex-shrink:0;">
           <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:#3A72A5;stroke-width:2;">
             <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -172,18 +173,22 @@ export function openTilemapEditor(obj) {
           <button id="tm-close" style="background:none;border:none;color:#666;cursor:pointer;font-size:16px;padding:2px 5px;">✕</button>
         </div>
 
-        <!-- Map settings -->
         <div style="padding:10px 14px;border-bottom:1px solid #2e2e3a;flex-shrink:0;">
           <div style="font-size:9px;font-weight:700;color:#505060;letter-spacing:.8px;margin-bottom:8px;">MAP SETTINGS</div>
           <div class="tm-row"><span class="tm-lbl">Columns</span><input type="number" id="tm-cols" value="${d.cols}" min="1" max="512" class="tm-inp"></div>
           <div class="tm-row"><span class="tm-lbl">Rows</span><input type="number" id="tm-rows" value="${d.rows}" min="1" max="512" class="tm-inp"></div>
           <div class="tm-row"><span class="tm-lbl">Tile W</span><input type="number" id="tm-tw" value="${d.tileW}" min="4" max="512" class="tm-inp"></div>
           <div class="tm-row"><span class="tm-lbl">Tile H</span><input type="number" id="tm-th" value="${d.tileH}" min="4" max="512" class="tm-inp"></div>
+          <div class="tm-row"><span class="tm-lbl">Render</span>
+            <select id="tm-filter" class="tm-inp" style="width:auto;">
+              <option value="smooth"    ${d.filterMode==='smooth'?'selected':''}>Smooth (curves)</option>
+              <option value="pixelated" ${d.filterMode==='pixelated'?'selected':''}>Pixelated</option>
+            </select>
+          </div>
           <button id="tm-apply-settings" style="width:100%;margin-top:6px;background:#1e3050;border:1px solid #3A72A5;
                   color:#7aabcc;border-radius:4px;padding:5px;cursor:pointer;font-size:10px;">Apply</button>
         </div>
 
-        <!-- Tileset -->
         <div style="padding:10px 14px;border-bottom:1px solid #2e2e3a;flex-shrink:0;">
           <div style="font-size:9px;font-weight:700;color:#505060;letter-spacing:.8px;margin-bottom:8px;">TILESET</div>
           <select id="tm-tileset-select" style="width:100%;background:#16161e;border:1px solid #3a3a48;
@@ -192,15 +197,14 @@ export function openTilemapEditor(obj) {
           </select>
         </div>
 
-        <!-- Tools -->
         <div style="padding:10px 14px;border-bottom:1px solid #2e2e3a;flex-shrink:0;">
           <div style="font-size:9px;font-weight:700;color:#505060;letter-spacing:.8px;margin-bottom:8px;">TOOLS</div>
           <div style="display:flex;gap:4px;">
             <button class="tm-tool-btn tm-tool-active" data-tool="paint" title="Paint (B)">
-              <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+              <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
             </button>
             <button class="tm-tool-btn" data-tool="erase" title="Erase (E)">
-              <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;"><path d="M20 20H7L3 16l10-10 7 7-1.5 1.5"/><path d="M6.0 11.0 L13 4"/></svg>
+              <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;"><path d="M20 20H7L3 16l10-10 7 7-1.5 1.5"/></svg>
             </button>
             <button class="tm-tool-btn" data-tool="fill" title="Fill (F)">
               <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;"><path d="M16 6l2 2-8 8-4-4 8-8z"/><path d="M2 22l4-4"/><circle cx="20" cy="20" r="2"/></svg>
@@ -211,17 +215,15 @@ export function openTilemapEditor(obj) {
           </div>
         </div>
 
-        <!-- Tileset preview + selection -->
         <div style="flex:1;overflow:hidden;display:flex;flex-direction:column;padding:10px 14px;">
           <div style="font-size:9px;font-weight:700;color:#505060;letter-spacing:.8px;margin-bottom:6px;">SELECT TILE <span id="tm-sel-tile-info" style="color:#7aabcc;font-weight:400;"></span></div>
           <div style="flex:1;overflow:auto;background:#0e0e18;border-radius:4px;position:relative;">
-            <canvas id="tm-tileset-canvas" style="display:block;image-rendering:pixelated;cursor:crosshair;"></canvas>
+            <canvas id="tm-tileset-canvas" style="display:block;cursor:crosshair;"></canvas>
             <canvas id="tm-tileset-overlay" style="position:absolute;inset:0;pointer-events:none;"></canvas>
           </div>
         </div>
       </div>
 
-      <!-- Right: map canvas -->
       <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#0e0e18;">
         <div style="padding:8px 14px;border-bottom:1px solid #1e1e2e;font-size:10px;color:#505060;
                     flex-shrink:0;display:flex;align-items:center;gap:10px;">
@@ -230,7 +232,7 @@ export function openTilemapEditor(obj) {
         </div>
         <div id="tm-canvas-wrap" style="flex:1;overflow:auto;padding:20px;display:flex;align-items:flex-start;justify-content:flex-start;">
           <div style="position:relative;display:inline-block;flex-shrink:0;">
-            <canvas id="tm-map-canvas" style="display:block;image-rendering:pixelated;cursor:crosshair;"></canvas>
+            <canvas id="tm-map-canvas" style="display:block;cursor:crosshair;"></canvas>
             <canvas id="tm-map-overlay" style="position:absolute;inset:0;pointer-events:none;"></canvas>
           </div>
         </div>
@@ -263,7 +265,6 @@ function _wireTilemapEditor(panel, obj) {
     let tilesetImg = null;
     const undoStack = [];
 
-    // canvases
     const mapCanvas   = panel.querySelector('#tm-map-canvas');
     const mapOverlay  = panel.querySelector('#tm-map-overlay');
     const tsCanvas    = panel.querySelector('#tm-tileset-canvas');
@@ -273,15 +274,25 @@ function _wireTilemapEditor(panel, obj) {
     const tsctx = tsCanvas.getContext('2d');
     const tsoctx = tsOverlay.getContext('2d');
 
-    // ── Close ────────────────────────────────────────────────
+    function _applySmoothness() {
+        const sharp = d.filterMode === 'pixelated';
+        for (const cv of [mapCanvas, mapOverlay, tsCanvas, tsOverlay]) {
+            cv.style.imageRendering = sharp ? 'pixelated' : 'auto';
+        }
+        for (const cx of [mctx, moctx, tsctx, tsoctx]) {
+            cx.imageSmoothingEnabled = !sharp;
+            cx.imageSmoothingQuality = 'high';
+        }
+    }
+
     panel.querySelector('#tm-close').addEventListener('click', () => {
         rebuildTilemapSprites(obj);
         _buildTilemapHelper(obj);
         import('./engine.ui.js').then(m => { m.syncPixiToInspector(); m.refreshHierarchy(); });
         panel.remove();
+        window.removeEventListener('keydown', _onKey);
     });
 
-    // ── Populate tileset select ──────────────────────────────
     const sel = panel.querySelector('#tm-tileset-select');
     state.assets.filter(a => a.type !== 'audio').forEach(a => {
         const opt = document.createElement('option');
@@ -322,9 +333,10 @@ function _wireTilemapEditor(panel, obj) {
         tsCanvas.width  = tilesetImg.width;
         tsCanvas.height = tilesetImg.height;
         tsOverlay.width = tilesetImg.width; tsOverlay.height = tilesetImg.height;
+        _applySmoothness();
         tsctx.drawImage(tilesetImg, 0, 0);
-        // Grid
         tsctx.strokeStyle = 'rgba(58,114,165,0.4)'; tsctx.lineWidth = 0.5;
+        tsctx.beginPath();
         for (let c = 0; c <= d.tilesetCols; c++) {
             tsctx.moveTo(c * d.tileW, 0); tsctx.lineTo(c * d.tileW, tilesetImg.height);
         }
@@ -344,7 +356,6 @@ function _wireTilemapEditor(panel, obj) {
         panel.querySelector('#tm-sel-tile-info').textContent = `#${selectedTile}`;
     }
 
-    // Tileset click → select tile
     tsCanvas.addEventListener('mousedown', e => {
         const rect = tsCanvas.getBoundingClientRect();
         const mx = (e.clientX - rect.left) * (tsCanvas.width  / rect.width);
@@ -358,18 +369,18 @@ function _wireTilemapEditor(panel, obj) {
         }
     });
 
-    // ── Map canvas ───────────────────────────────────────────
     function _initMapCanvas() {
         mapCanvas.width  = d.cols * d.tileW;
         mapCanvas.height = d.rows * d.tileH;
         mapOverlay.width  = mapCanvas.width;
         mapOverlay.height = mapCanvas.height;
+        _applySmoothness();
     }
 
     function _drawMap() {
+        _applySmoothness();
         mctx.fillStyle = '#1a2535';
         mctx.fillRect(0, 0, mapCanvas.width, mapCanvas.height);
-        // Tiles
         if (tilesetImg) {
             for (let i = 0; i < d.tiles.length; i++) {
                 const tIdx = d.tiles[i];
@@ -381,16 +392,11 @@ function _wireTilemapEditor(panel, obj) {
                     col * d.tileW, row * d.tileH, d.tileW, d.tileH);
             }
         }
-        // Grid overlay
         mctx.strokeStyle = 'rgba(58,114,165,0.18)'; mctx.lineWidth = 0.5;
-        for (let c = 0; c <= d.cols; c++) {
-            mctx.moveTo(c * d.tileW, 0); mctx.lineTo(c * d.tileW, mapCanvas.height);
-        }
-        for (let r = 0; r <= d.rows; r++) {
-            mctx.moveTo(0, r * d.tileH); mctx.lineTo(mapCanvas.width, r * d.tileH);
-        }
+        mctx.beginPath();
+        for (let c = 0; c <= d.cols; c++) { mctx.moveTo(c * d.tileW, 0); mctx.lineTo(c * d.tileW, mapCanvas.height); }
+        for (let r = 0; r <= d.rows; r++) { mctx.moveTo(0, r * d.tileH); mctx.lineTo(mapCanvas.width, r * d.tileH); }
         mctx.stroke();
-        // Border
         mctx.strokeStyle = 'rgba(58,114,165,0.6)'; mctx.lineWidth = 2;
         mctx.strokeRect(0, 0, mapCanvas.width, mapCanvas.height);
     }
@@ -399,12 +405,8 @@ function _wireTilemapEditor(panel, obj) {
         const rect = mapCanvas.getBoundingClientRect();
         const mx = (e.clientX - rect.left) * (mapCanvas.width  / rect.width);
         const my = (e.clientY - rect.top)  * (mapCanvas.height / rect.height);
-        return {
-            c: Math.floor(mx / d.tileW),
-            r: Math.floor(my / d.tileH),
-        };
+        return { c: Math.floor(mx / d.tileW), r: Math.floor(my / d.tileH) };
     }
-
     function _validCell(c, r) { return c >= 0 && c < d.cols && r >= 0 && r < d.rows; }
 
     function _paintCell(c, r) {
@@ -425,7 +427,6 @@ function _wireTilemapEditor(panel, obj) {
         const target = d.tiles[r * d.cols + c];
         const replace = tool === 'erase' ? -1 : selectedTile;
         if (target === replace) return;
-        // BFS flood fill
         const queue = [[c, r]];
         const visited = new Uint8Array(d.cols * d.rows);
         while (queue.length) {
@@ -444,14 +445,12 @@ function _wireTilemapEditor(panel, obj) {
         undoStack.push(new Int32Array(d.tiles));
         if (undoStack.length > 30) undoStack.shift();
     }
-
     function _undo() {
         if (!undoStack.length) return;
         d.tiles = undoStack.pop();
         _drawMap();
     }
 
-    // Map events
     mapCanvas.addEventListener('mousedown', e => {
         const { c, r } = _getCell(e);
         if (!_validCell(c, r)) return;
@@ -470,7 +469,6 @@ function _wireTilemapEditor(panel, obj) {
         const { c, r } = _getCell(e);
         panel.querySelector('#tm-cursor-info').textContent =
             _validCell(c, r) ? `Col ${c+1}, Row ${r+1}  (tile ${d.tiles[r*d.cols+c]})` : '';
-        // Hover overlay
         moctx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
         if (_validCell(c, r)) {
             if (tool === 'paint' && tilesetImg) {
@@ -491,7 +489,6 @@ function _wireTilemapEditor(panel, obj) {
         panel.querySelector('#tm-cursor-info').textContent = '';
     });
 
-    // ── Tool buttons ─────────────────────────────────────────
     function setTool(t) {
         tool = t;
         panel.querySelectorAll('.tm-tool-btn').forEach(b => {
@@ -502,7 +499,6 @@ function _wireTilemapEditor(panel, obj) {
         b.addEventListener('click', () => setTool(b.dataset.tool));
     });
 
-    // ── Keyboard shortcuts ───────────────────────────────────
     const _onKey = e => {
         if (e.target.tagName === 'INPUT') return;
         if (e.key === 'b' || e.key === 'B') setTool('paint');
@@ -512,15 +508,13 @@ function _wireTilemapEditor(panel, obj) {
         if ((e.ctrlKey||e.metaKey) && e.key === 'z') { e.preventDefault(); _undo(); }
     };
     window.addEventListener('keydown', _onKey);
-    panel.addEventListener('remove', () => window.removeEventListener('keydown', _onKey), { once: true });
 
-    // ── Apply settings ───────────────────────────────────────
     panel.querySelector('#tm-apply-settings').addEventListener('click', () => {
         const nc = Math.max(1, parseInt(panel.querySelector('#tm-cols').value)||20);
         const nr = Math.max(1, parseInt(panel.querySelector('#tm-rows').value)||15);
         const tw = Math.max(4, parseInt(panel.querySelector('#tm-tw').value)||32);
         const th = Math.max(4, parseInt(panel.querySelector('#tm-th').value)||32);
-        // Resize tile array preserving existing data
+        const fm = panel.querySelector('#tm-filter').value;
         const newTiles = new Int32Array(nc * nr).fill(-1);
         for (let r = 0; r < Math.min(nr, d.rows); r++) {
             for (let c = 0; c < Math.min(nc, d.cols); c++) {
@@ -528,6 +522,7 @@ function _wireTilemapEditor(panel, obj) {
             }
         }
         d.cols = nc; d.rows = nr; d.tileW = tw; d.tileH = th; d.tiles = newTiles;
+        d.filterMode = fm;
         if (tilesetImg) {
             d.tilesetCols = Math.max(1, Math.floor(tilesetImg.width  / tw));
             d.tilesetRows = Math.max(1, Math.floor(tilesetImg.height / th));
@@ -537,7 +532,6 @@ function _wireTilemapEditor(panel, obj) {
         _drawMap();
     });
 
-    // ── Init ─────────────────────────────────────────────────
     _initMapCanvas();
     _drawMap();
     if (d.assetId) _loadTileset();
@@ -545,7 +539,7 @@ function _wireTilemapEditor(panel, obj) {
 
 // ── Inspector HTML for tilemap ───────────────────────────────
 export function buildTilemapInspectorHTML(obj) {
-    const d = obj.tilemapData;
+    const d = obj.tilemapData; _migrate(d);
     const asset = d.assetId ? state.assets.find(a => a.id === d.assetId) : null;
     return `
     <div class="component-block" id="inspector-tilemap-section">
@@ -560,6 +554,7 @@ export function buildTilemapInspectorHTML(obj) {
       <div class="component-body" style="display:flex;flex-direction:column;gap:5px;">
         <div class="prop-row"><span class="prop-label">Size</span><span style="color:#9bc;">${d.cols} × ${d.rows} tiles</span></div>
         <div class="prop-row"><span class="prop-label">Tile size</span><span style="color:#9bc;">${d.tileW} × ${d.tileH} px</span></div>
+        <div class="prop-row"><span class="prop-label">Render</span><span style="color:#9bc;">${d.filterMode}</span></div>
         <div class="prop-row"><span class="prop-label">Tileset</span><span style="color:#9bc;font-size:10px;overflow:hidden;text-overflow:ellipsis;">${asset ? asset.name : '— none —'}</span></div>
         <button id="btn-open-tilemap-editor" style="width:100%;background:#1a2a1a;border:1px solid #4ade80;color:#4ade80;
                 border-radius:4px;padding:6px;cursor:pointer;font-size:11px;margin-top:4px;
@@ -579,10 +574,7 @@ export function snapshotTilemap(obj) {
     return {
         isTilemap: true,
         label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
-        tilemapData: {
-            ...obj.tilemapData,
-            tiles: Array.from(obj.tilemapData.tiles), // serialize Int32Array
-        },
+        tilemapData: { ...obj.tilemapData, tiles: Array.from(obj.tilemapData.tiles) },
     };
 }
 
@@ -590,6 +582,7 @@ export async function restoreTilemap(s) {
     const obj = createTilemap(s.x, s.y);
     obj.label = s.label; obj.unityZ = s.unityZ || 0;
     obj.tilemapData = { ...s.tilemapData, tiles: new Int32Array(s.tilemapData.tiles) };
+    _migrate(obj.tilemapData);
     _buildTilemapHelper(obj);
     rebuildTilemapSprites(obj);
     return obj;
@@ -616,8 +609,6 @@ function _attachTranslateGizmo(container) {
     container._grpTranslate = grpT; container._grpRotate = grpR; container._grpScale = grpS;
     gizmoContainer.addChild(grpT, grpR, grpS);
     container._gizmoHandles = { transX:g1, transY:g2, transCenter:g3, scaleX:g1, scaleY:g2, scaleCenter:g3, rotRing:g3 };
-
-    // Stop propagation so the container's broad pointerdown doesn't also fire on a gizmo drag
     [g1, g2, g3].forEach(h => h.on('pointerdown', e => e.stopPropagation()));
 }
 function _makeAxisLine(color, len, isY) {

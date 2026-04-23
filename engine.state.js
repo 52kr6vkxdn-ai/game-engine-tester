@@ -46,6 +46,15 @@ export const state = {
     /** @type {Array<{id:string, name:string, type:string, dataURL:string}>} */
     assets: [],
 
+    // ── Tile brush registry (auto-tiler brushes, shared) ──
+    /**
+     * Each brush:
+     *   { id, name, type:'16-tile', tileW, tileH,
+     *     tiles: Array<string|null>  // length 16, dataURLs by neighbor mask }
+     * @type {Array<object>}
+     */
+    tilesetBrushes: [],
+
     // ── Prefab registry ────────────────────────────────────
     /**
      * @type {Array<{id:string, name:string, shapeKey:string, isImage:boolean,
