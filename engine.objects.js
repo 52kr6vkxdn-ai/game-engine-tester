@@ -104,8 +104,8 @@ export function selectObject(obj) {
         state.spriteBox      = obj.spriteGraphic || null;
 
         if (obj._grpTranslate) {
-            if (obj.isLight || obj.isFog) {
-                obj._grpTranslate.visible = !!obj.isLight; // fog has no scene position UI
+            if (obj.isLight) {
+                obj._grpTranslate.visible = true;
                 obj._grpRotate.visible    = false;
                 obj._grpScale.visible     = false;
             } else {

@@ -13,19 +13,6 @@ export const LIGHT_TYPES = {
     area:        { label: 'Area Light',         icon: '▭'  },
 };
 
-// Shared shadow settings appended to lights that can cast shadows
-function defaultShadowProps() {
-    return {
-        castShadows:    false,
-        shadowStrength: 0.85,   // 0..1 darkness inside shadowed regions
-        shadowSoftness: 8,      // px gaussian blur applied to shadow mask
-        shadowSamples:  3,      // 1..6 — multi-sample for penumbra (soft edges)
-        shadowSize:     14,     // light-source radius in px (larger = softer penumbra)
-        shadowColor:    0x000000,
-        shadowBias:     1.5,    // pushes ray origin out a bit to avoid self-shadow acne
-    };
-}
-
 // Default properties per light type
 export function defaultLightProps(type) {
     const base = {
@@ -35,9 +22,9 @@ export function defaultLightProps(type) {
     };
     switch (type) {
         case 'point':
-            return { ...base, radius: 200, falloff: 2.0, ...defaultShadowProps() };
+            return { ...base, radius: 200, falloff: 2.0, castShadows: false };
         case 'spot':
-            return { ...base, radius: 250, angle: 45, falloff: 1.8, direction: 0, ...defaultShadowProps() };
+            return { ...base, radius: 250, angle: 45, falloff: 1.8, direction: 0, castShadows: false };
         case 'directional':
             return { ...base, angle: 0, softness: 0.3 };
         case 'area':
@@ -45,13 +32,6 @@ export function defaultLightProps(type) {
         default:
             return base;
     }
-}
-
-// Ensure older loaded lights get the new shadow keys
-function _ensureShadowDefaults(p) {
-    if (!p) return;
-    const def = defaultShadowProps();
-    for (const k in def) if (p[k] === undefined) p[k] = def[k];
 }
 
 // ── Create a 2D Light object ─────────────────────────────────
@@ -287,30 +267,6 @@ let _lightingTickerFn = null;
 const AMBIENT_EDIT = 0x6e6e80;
 const AMBIENT_PLAY = 0x0e0e1a;
 
-// World-level lighting settings (overridable via the "World Lighting" panel)
-export function getLightingSettings() {
-    if (!state.lightingSettings) {
-        state.lightingSettings = {
-            enabled:        true,
-            ambient:        0x162030,  // single ambient — same in editor + play
-            darkness:       0.85,      // 0 = no darkening, 1 = pitch dark
-            shadowMult:     1.0,    // multiplies all per-light shadow softness
-            shadowQuality:  1.0,    // multiplier for samples (perf/quality)
-        };
-    }
-    return state.lightingSettings;
-}
-
-// Helper: mix a colour toward black by `darkness` (0..1, 1 = full black)
-function _applyDarkness(color, darkness) {
-    const r = (color >> 16) & 0xFF;
-    const g = (color >> 8)  & 0xFF;
-    const b = (color)       & 0xFF;
-    const k = 1 - Math.max(0, Math.min(1, darkness));
-    const rr = (r * k) | 0, gg = (g * k) | 0, bb = (b * k) | 0;
-    return (rr << 16) | (gg << 8) | bb;
-}
-
 export function initLighting() {
     if (_lightingInited || !state.app) return;
     const { app } = state;
@@ -334,121 +290,11 @@ export function initLighting() {
 
     state._lightingScratch = new PIXI.Container();
 
-    _initGPULighting();
-
     _lightingTickerFn = _renderLightingFrame;
     app.ticker.add(_lightingTickerFn);
 
     app.renderer.on('resize', _onLightingResize);
     _lightingInited = true;
-}
-
-// ============================================================
-//  GPU PIPELINE — FBM dynamic fog (full WebGL fragment shader)
-// ============================================================
-const FOG_FRAG = `
-varying vec2 vTextureCoord;
-uniform sampler2D uSampler;
-uniform float uTime;
-uniform vec3  uColor;
-uniform float uDensity;
-uniform float uScale;
-uniform float uSpeed;
-uniform float uVerticalFade;
-uniform float uOctaves;       // 1..8 detail layers
-uniform float uContrast;      // 0..3 sharpness of fog edges
-uniform float uBrightness;    // multiplier on output color
-uniform vec2  uWind;          // direction vector (scrolls FBM)
-uniform float uDetail;        // mix of high-frequency noise (0..1)
-uniform float uMaxAlpha;      // hard cap on opacity — guarantees sprites stay visible
-float hash(vec2 p) {
-    p = fract(p * vec2(443.897, 441.423));
-    p += dot(p, p.yx + 19.19);
-    return fract((p.x + p.y) * p.x);
-}
-float vnoise(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
-    vec2 u = f*f*(3.0 - 2.0*f);
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-float fbm(vec2 p, float oct) {
-    float v = 0.0, amp = 0.55;
-    int N = int(clamp(oct, 1.0, 8.0));
-    for (int i = 0; i < 8; i++) {
-        if (i >= N) break;
-        v += amp * vnoise(p);
-        p = p * 2.05 + vec2(1.7, 9.2);
-        amp *= 0.55;
-    }
-    return v;
-}
-void main() {
-    vec2 uv = vTextureCoord;
-    vec2 p = uv * uScale * 4.0;
-    p += uWind * uTime * uSpeed;
-    float n1 = fbm(p, uOctaves);
-    float n2 = fbm(p * 0.5 - uWind * uTime * uSpeed * 0.6, uOctaves);
-    float n  = mix(n1, n2, 0.5);
-    // Detail layer (high freq) for billowing texture
-    float det = vnoise(p * 6.0 + uWind * uTime * uSpeed * 1.4);
-    n = mix(n, n * 0.6 + det * 0.4, clamp(uDetail, 0.0, 1.0));
-    // Contrast — sharpen the noise into wisps
-    float lo = 0.5 - 0.5 / max(uContrast, 0.001);
-    float hi = 0.5 + 0.5 / max(uContrast, 0.001);
-    n = smoothstep(clamp(lo, 0.0, 1.0), clamp(hi, 0.0, 1.0), n);
-    float vFade = mix(1.0 - uVerticalFade, 1.0, uv.y);
-    float a = clamp(n * uDensity * vFade, 0.0, 1.0);
-    a = min(a, clamp(uMaxAlpha, 0.0, 1.0));
-    gl_FragColor = vec4(uColor * uBrightness * a, a);
-}`;
-
-let _gpuInited = false;
-let _fogSprite = null;
-let _fogFilter = null;
-
-function _initGPULighting() {
-    if (_gpuInited || !state.app) return;
-    const app = state.app;
-    // Fog: fullscreen sprite + custom filter
-    _fogSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
-    _fogSprite.eventMode = 'none';
-    _fogSprite.tint = 0xFFFFFF;
-    _fogSprite.alpha = 1;
-    _fogSprite.blendMode = PIXI.BLEND_MODES.NORMAL;
-    _fogSprite.width  = app.screen.width;
-    _fogSprite.height = app.screen.height;
-    _fogFilter = new PIXI.Filter(undefined, FOG_FRAG, {
-        uTime: 0,
-        uColor: new Float32Array([0.78, 0.83, 0.92]),
-        uDensity: 0.45,
-        uScale: 1.4,
-        uSpeed: 0.06,
-        uVerticalFade: 0.35,
-        uOctaves: 5,
-        uContrast: 1.0,
-        uBrightness: 1.0,
-        uWind: new Float32Array([1.0, 0.4]),
-        uDetail: 0.25,
-        uMaxAlpha: 0.55,        // sprites stay visible
-    });
-    _fogSprite.filters = [_fogFilter];
-    _fogSprite.filterArea = new PIXI.Rectangle(0, 0, app.screen.width, app.screen.height);
-    _fogSprite.visible = false;
-    app.stage.addChild(_fogSprite);
-
-    _gpuInited = true;
-}
-
-function _resizeGPU(w, h) {
-    if (!_gpuInited) return;
-    if (_fogSprite) {
-        _fogSprite.width = w; _fogSprite.height = h;
-        _fogSprite.filterArea = new PIXI.Rectangle(0, 0, w, h);
-    }
 }
 
 function _onLightingResize() {
@@ -463,7 +309,6 @@ function _onLightingResize() {
         state._shadowCanvas.width  = w;
         state._shadowCanvas.height = h;
     }
-    _resizeGPU(w, h);
 }
 
 // ── Shadow canvas (2D, CPU ray-cast) ──────────────────────────
@@ -485,67 +330,35 @@ function _ensureShadowCanvas() {
 }
 
 // ── Collect occluder AABBs in screen space ────────────────────
-function _aabbToOccluder(b) {
-    return {
-        x: b.x, y: b.y, w: b.width, h: b.height,
-        corners: [
-            { x: b.x,           y: b.y },
-            { x: b.x + b.width, y: b.y },
-            { x: b.x + b.width, y: b.y + b.height },
-            { x: b.x,           y: b.y + b.height },
-        ],
-        segments: [
-            [{ x: b.x,           y: b.y },           { x: b.x + b.width, y: b.y }],
-            [{ x: b.x + b.width, y: b.y },           { x: b.x + b.width, y: b.y + b.height }],
-            [{ x: b.x + b.width, y: b.y + b.height },{ x: b.x,           y: b.y + b.height }],
-            [{ x: b.x,           y: b.y + b.height },{ x: b.x,           y: b.y }],
-        ],
-    };
-}
-
 function _getOccluders() {
+    const sc = state.sceneContainer;
     const occluders = [];
     for (const obj of state.gameObjects) {
         if (obj.isLight) continue;
-        if (obj.lightProps?.castsShadow === false) continue;
+        if (obj.lightProps?.castsShadow === false) continue; // explicit opt-out
+        // Only sprite objects cast shadows (tilemaps can opt in too)
+        if (!obj.isImage && !obj.isTilemap) continue;
 
-        // Per-tile occluders for tilemaps — each non-empty cell becomes its own AABB
-        if (obj.isTilemap && obj.tilemapData) {
-            const d = obj.tilemapData;
-            const tw = d.tileW, th = d.tileH;
-            // Convert tile-local rect (0,0,tw,th) to screen via container transform
-            const topLeft = obj.toGlobal(new PIXI.Point(0, 0));
-            const sx = obj.scale?.x ?? 1;
-            const sy = obj.scale?.y ?? 1;
-            const cam = state.sceneContainer.scale.x;
-            const screenTW = tw * sx * cam;
-            const screenTH = th * sy * cam;
-            // Quick reject: if a tilemap has thousands of tiles, only emit
-            // those whose screen position is on-screen + a margin
-            const sw = state.app.screen.width;
-            const sh = state.app.screen.height;
-            const margin = 256;
-            for (let r = 0; r < d.rows; r++) {
-                for (let c = 0; c < d.cols; c++) {
-                    const idx = r * d.cols + c;
-                    if (d.tiles[idx] < 0) continue;
-                    const x = topLeft.x + c * screenTW;
-                    const y = topLeft.y + r * screenTH;
-                    if (x + screenTW < -margin || x > sw + margin ||
-                        y + screenTH < -margin || y > sh + margin) continue;
-                    occluders.push(_aabbToOccluder({
-                        x, y, width: screenTW, height: screenTH,
-                    }));
-                }
-            }
-            continue;
-        }
-
-        if (!obj.isImage) continue;
         try {
-            const b = obj.getBounds();
+            const b = obj.getBounds(); // screen-space AABB
             if (b.width < 2 || b.height < 2) continue;
-            occluders.push(_aabbToOccluder(b));
+            occluders.push({
+                x: b.x, y: b.y, w: b.width, h: b.height,
+                // 4 corner points for the AABB
+                corners: [
+                    { x: b.x,          y: b.y },
+                    { x: b.x + b.width,y: b.y },
+                    { x: b.x + b.width,y: b.y + b.height },
+                    { x: b.x,          y: b.y + b.height },
+                ],
+                // 4 segments
+                segments: [
+                    [{ x: b.x,          y: b.y },          { x: b.x + b.width, y: b.y }],
+                    [{ x: b.x + b.width,y: b.y },          { x: b.x + b.width, y: b.y + b.height }],
+                    [{ x: b.x + b.width,y: b.y + b.height },{ x: b.x,          y: b.y + b.height }],
+                    [{ x: b.x,          y: b.y + b.height },{ x: b.x,          y: b.y }],
+                ],
+            });
         } catch (_) {}
     }
     return occluders;
@@ -619,143 +432,73 @@ function _buildVisibilityPolygon(lx, ly, radius, occluders, screenW, screenH) {
     return hits;
 }
 
-// ── Lazy scratch canvas used per-light to allow tinted shadows ──
-function _ensureShadowScratch(w, h) {
-    if (!state._shadowScratch || state._shadowScratch.width !== w || state._shadowScratch.height !== h) {
-        const c = document.createElement('canvas');
-        c.width = w; c.height = h;
-        state._shadowScratch = c;
-        state._shadowScratchCtx = c.getContext('2d');
-    }
-    return state._shadowScratchCtx;
-}
-
 // ── Draw shadow layer for one frame ──────────────────────────
 function _renderShadowFrame(lights, occluders) {
     _ensureShadowCanvas();
-    const c   = state._shadowCanvas;
-    const ctx = state._shadowCtx;
-    const w   = c.width;
-    const h   = c.height;
-    const cfg = getLightingSettings();
+    const c    = state._shadowCanvas;
+    const ctx  = state._shadowCtx;
+    const w    = c.width;
+    const h    = c.height;
 
     // Start fully lit (white = no darkening in MULTIPLY)
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
-    ctx.filter = 'none';
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, w, h);
 
-    const shadowCasters = lights.filter(L => {
-        const p = L.lightProps;
-        if (!p?.enabled || !p.castShadows) return false;
-        return L.lightType === 'point' || L.lightType === 'spot';
-    });
+    const shadowCasters = lights.filter(L =>
+        L.lightProps?.castShadows &&
+        (L.lightType === 'point' || L.lightType === 'spot') &&
+        L.lightProps?.enabled
+    );
 
     if (!shadowCasters.length) {
+        // No shadow lights — leave canvas white (neutral MULTIPLY)
         state._shadowSprite.visible = false;
         state._shadowTex.update();
         return;
     }
     state._shadowSprite.visible = true;
 
-    const scratchCtx = _ensureShadowScratch(w, h);
-
     for (const L of shadowCasters) {
         const p   = L.lightProps;
-        _ensureShadowDefaults(p);
         const pos = state.sceneContainer.toGlobal(new PIXI.Point(L.x, L.y));
         const lx  = pos.x, ly = pos.y;
         const camScale = state.sceneContainer.scale.x;
+        const radius   = (p.radius ?? 200) * camScale;
 
-        // Effective shadow zone radius
-        const radius = (p.radius ?? 200) * camScale;
-        if (radius < 4) continue;
+        // Darken area within radius to shadow-gray, lit polygon will restore it
+        // Use a clipping/compositing trick:
+        // 1. Draw dark circle (shadow zone) with destination-in or manual polygon
 
-        // Penumbra: multi-sample around the light origin within shadowSize
-        const samples = Math.max(1, Math.min(8,
-            Math.round((p.shadowSamples ?? 3) * (cfg.shadowQuality ?? 1))
-        ));
-        const sourceR = Math.max(0, (p.shadowSize ?? 14) * camScale);
-        const strength = Math.max(0, Math.min(1, p.shadowStrength ?? 0.85));
-        const blurPx   = Math.max(0, (p.shadowSoftness ?? 8) * (cfg.shadowMult ?? 1));
-        const sCol     = p.shadowColor ?? 0x000000;
-        const sR = (sCol >> 16) & 0xFF;
-        const sG = (sCol >> 8)  & 0xFF;
-        const sB = (sCol)       & 0xFF;
-        const colCss = `rgb(${sR},${sG},${sB})`;
-        const bias   = p.shadowBias ?? 1.5;
+        const poly = _buildVisibilityPolygon(lx, ly, radius, occluders, w, h);
+        if (poly.length < 3) continue;
 
-        // Render this light's shadow into the scratch canvas, then blur,
-        // then composite over the main shadow canvas with MULTIPLY.
-        scratchCtx.setTransform(1, 0, 0, 1, 0, 0);
-        scratchCtx.globalCompositeOperation = 'source-over';
-        scratchCtx.globalAlpha = 1;
-        scratchCtx.filter = 'none';
-        scratchCtx.clearRect(0, 0, w, h);
-
-        // 1) Paint the falloff "shadow zone" (gradient toward dark at center→edge)
-        const grd = scratchCtx.createRadialGradient(lx, ly, 0, lx, ly, radius);
-        grd.addColorStop(0,   `rgba(${sR},${sG},${sB},${strength})`);
-        grd.addColorStop(0.6, `rgba(${sR},${sG},${sB},${strength * 0.78})`);
-        grd.addColorStop(1,   `rgba(${sR},${sG},${sB},0)`);
-
-        // For spot — only darken inside the cone (keeps shadows directional)
-        let coneClip = null;
-        if (L.lightType === 'spot') {
-            const halfAng = ((p.angle ?? 45) / 2) * Math.PI / 180;
-            const dirAng  = ((p.direction ?? 0)) * Math.PI / 180;
-            coneClip = { dir: dirAng, half: halfAng, len: radius };
-        }
-
-        scratchCtx.save();
-        if (coneClip) {
-            scratchCtx.beginPath();
-            scratchCtx.moveTo(lx, ly);
-            scratchCtx.arc(lx, ly, coneClip.len,
-                coneClip.dir - coneClip.half, coneClip.dir + coneClip.half);
-            scratchCtx.closePath();
-            scratchCtx.clip();
-        }
-        scratchCtx.beginPath();
-        scratchCtx.arc(lx, ly, radius, 0, Math.PI * 2);
-        scratchCtx.fillStyle = grd;
-        scratchCtx.fill();
-
-        // 2) Cut out the lit (visibility) area — averaged across N origin samples
-        scratchCtx.globalCompositeOperation = 'destination-out';
-        const perSampleAlpha = 1 / samples;
-
-        for (let i = 0; i < samples; i++) {
-            // Place sample on a small ring around the light center
-            const angle = (i / samples) * Math.PI * 2;
-            const ox = lx + Math.cos(angle) * sourceR;
-            const oy = ly + Math.sin(angle) * sourceR;
-
-            // Push origin slightly away from any nearby occluder edge to avoid acne
-            const poly = _buildVisibilityPolygon(ox, oy, radius + bias, occluders, w, h);
-            if (poly.length < 3) continue;
-
-            scratchCtx.globalAlpha = perSampleAlpha;
-            scratchCtx.beginPath();
-            scratchCtx.moveTo(poly[0].x, poly[0].y);
-            for (let k = 1; k < poly.length; k++) scratchCtx.lineTo(poly[k].x, poly[k].y);
-            scratchCtx.closePath();
-            scratchCtx.fill();
-        }
-        scratchCtx.restore();
-
-        // 3) Blur the result for a soft penumbra & blit to main shadow canvas
+        // Save state
         ctx.save();
-        ctx.globalCompositeOperation = 'multiply';
-        ctx.globalAlpha = 1;
-        if (blurPx > 0.1) ctx.filter = `blur(${blurPx}px)`;
-        else ctx.filter = 'none';
-        // First fill the area outside the shadow zone with pure white so MULTIPLY
-        // leaves it untouched — already done by default canvas (white background).
-        ctx.drawImage(state._shadowScratch, 0, 0);
+
+        // Draw the dark falloff disk first (this is the "shadow zone")
+        // We darken everything within radius, then cut out the lit polygon
+        const grd = ctx.createRadialGradient(lx, ly, 0, lx, ly, radius);
+        grd.addColorStop(0,   'rgba(0,0,0,0.72)');
+        grd.addColorStop(0.6, 'rgba(0,0,0,0.55)');
+        grd.addColorStop(1,   'rgba(0,0,0,0)');
+        ctx.beginPath();
+        ctx.arc(lx, ly, radius, 0, Math.PI * 2);
+        ctx.fillStyle = grd;
+        ctx.fill();
+
+        // Now cut out the visibility polygon using destination-out on a temp layer
+        // i.e. draw lit area brighter: paint white polygon on top (restores white = lit)
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = 'rgba(0,0,0,0.72)'; // match the center shadow strength
+
+        // Lit polygon
+        ctx.beginPath();
+        ctx.moveTo(poly[0].x, poly[0].y);
+        for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+        ctx.closePath();
+        ctx.fill();
+
         ctx.restore();
     }
 
@@ -783,16 +526,8 @@ function _renderLightingFrame() {
     scratch.removeChildren();
 
     // ── Pass 1: darkness mask (MULTIPLY) ──────────────────
-    const cfg = getLightingSettings();
-    if (!cfg.enabled) {
-        state.lightingMaskSprite.visible = false;
-        state.lightingGlowSprite.visible = false;
-        if (state._shadowSprite) state._shadowSprite.visible = false;
-        return;
-    }
-    const baseColor = cfg.ambient;
-    const darkness  = cfg.darkness;
-    const ambient   = _applyDarkness(baseColor, darkness);
+    const ambient = state.isPlaying ? (state.ambientPlay ?? AMBIENT_PLAY)
+                                    : (state.ambientEdit ?? AMBIENT_EDIT);
     const base = new PIXI.Sprite(PIXI.Texture.WHITE);
     base.tint = ambient;
     base.width  = app.screen.width;
@@ -816,41 +551,6 @@ function _renderLightingFrame() {
     // ── Pass 3: shadows (MULTIPLY canvas overlay) ─────────
     const occluders = _getOccluders();
     _renderShadowFrame(lights, occluders);
-
-    // ── Pass 4: GPU dynamic fog ──────────────────────────
-    _renderFog();
-}
-
-// (removed) GPU god-ray pass
-// ── GPU FBM fog ─────────────────────────────────────────────
-// Fog is on iff at least one isFog GameObject exists in the scene.
-// Deleting the Fog object instantly hides the fog sprite next frame.
-function _renderFog() {
-    if (!_gpuInited || !_fogSprite || !_fogFilter) return;
-    const fogObj = state.gameObjects.find(o => o?.isFog && o.fogProps?.enabled !== false);
-    if (!fogObj) { _fogSprite.visible = false; return; }
-    const fp  = fogObj.fogProps || {};
-    const cfg = getLightingSettings();
-    _fogSprite.visible = true;
-    const u = _fogFilter.uniforms;
-    u.uTime = performance.now() / 1000;
-    u.uDensity      = fp.density      ?? 0.45;
-    u.uScale        = fp.scale        ?? 1.4;
-    u.uSpeed        = fp.speed        ?? 0.06;
-    u.uVerticalFade = fp.verticalFade ?? 0.35;
-    u.uOctaves      = fp.octaves      ?? 5;
-    u.uContrast     = fp.contrast     ?? 1.0;
-    u.uBrightness   = fp.brightness   ?? 1.0;
-    u.uDetail       = fp.detail       ?? 0.25;
-    // Hard cap on opacity so sprites stay clearly visible
-    u.uMaxAlpha     = Math.min(0.92, fp.maxAlpha ?? 0.55);
-    const ang = ((fp.windAngle ?? 25) * Math.PI) / 180;
-    u.uWind[0] = Math.cos(ang);
-    u.uWind[1] = Math.sin(ang);
-    const c = fp.color ?? 0xC8D4E8;
-    u.uColor[0] = ((c >> 16) & 0xFF) / 255;
-    u.uColor[1] = ((c >> 8)  & 0xFF) / 255;
-    u.uColor[2] = ( c        & 0xFF) / 255;
 }
 
 function _buildLightContribution(L, forGlow) {
@@ -1007,7 +707,6 @@ function _getAreaTexture(falloff) {
     return tex;
 }
 
-
 function _getDirectionalTexture(softness) {
     const key = `dir:${Math.round(softness * 100)}`;
     if (_lightTexCache.has(key)) return _lightTexCache.get(key);
@@ -1038,55 +737,13 @@ function _getDirectionalTexture(softness) {
 export function applyLighting() { initLighting(); }
 
 // ── Inspector HTML for a light object ───────────────────────
-function _shadowBlockHTML(p) {
-    const sCol = '#' + ((p.shadowColor ?? 0) >>> 0).toString(16).padStart(6, '0').slice(-6);
-    return `
-    <div class="shadow-sub" style="margin-top:6px;border-top:1px solid #2a2a36;padding-top:6px;">
-        <div class="prop-row">
-            <span class="prop-label" style="color:#bb9;">Cast Shadows</span>
-            <input type="checkbox" id="li-cast-shadows" ${p.castShadows ? 'checked' : ''} style="accent-color:#facc15;width:14px;height:14px;">
-        </div>
-        <div id="li-shadow-controls" style="${p.castShadows ? '' : 'opacity:.45;pointer-events:none;'}">
-            <div class="prop-row">
-                <span class="prop-label">Strength</span>
-                <input type="range" id="li-sh-strength" min="0" max="1" step="0.01" value="${p.shadowStrength ?? 0.85}" class="light-slider">
-                <span id="li-sh-strength-val" class="prop-val">${(p.shadowStrength ?? 0.85).toFixed(2)}</span>
-            </div>
-            <div class="prop-row">
-                <span class="prop-label">Softness</span>
-                <input type="range" id="li-sh-softness" min="0" max="40" step="0.5" value="${p.shadowSoftness ?? 8}" class="light-slider">
-                <span id="li-sh-softness-val" class="prop-val">${(p.shadowSoftness ?? 8).toFixed(1)}px</span>
-            </div>
-            <div class="prop-row">
-                <span class="prop-label">Penumbra</span>
-                <input type="range" id="li-sh-samples" min="1" max="6" step="1" value="${p.shadowSamples ?? 3}" class="light-slider">
-                <span id="li-sh-samples-val" class="prop-val">${p.shadowSamples ?? 3}</span>
-            </div>
-            <div class="prop-row">
-                <span class="prop-label">Source Size</span>
-                <input type="range" id="li-sh-size" min="0" max="60" step="0.5" value="${p.shadowSize ?? 14}" class="light-slider">
-                <span id="li-sh-size-val" class="prop-val">${(p.shadowSize ?? 14).toFixed(1)}px</span>
-            </div>
-            <div class="prop-row">
-                <span class="prop-label">Bias</span>
-                <input type="range" id="li-sh-bias" min="0" max="10" step="0.1" value="${p.shadowBias ?? 1.5}" class="light-slider">
-                <span id="li-sh-bias-val" class="prop-val">${(p.shadowBias ?? 1.5).toFixed(1)}</span>
-            </div>
-            <div class="prop-row">
-                <span class="prop-label">Color</span>
-                <input type="color" id="li-sh-color" value="${sCol}">
-            </div>
-        </div>
-    </div>`;
-}
-
 export function buildLightInspectorHTML(obj) {
     if (!obj?.isLight) return '';
     const p = obj.lightProps;
-    _ensureShadowDefaults(p);
     const type = obj.lightType;
 
     const hexColor = '#' + (p.color >>> 0).toString(16).padStart(6, '0').slice(-6);
+    const pct = v => Math.round(v * 100);
 
     let typeSpecific = '';
     if (type === 'point') {
@@ -1101,7 +758,10 @@ export function buildLightInspectorHTML(obj) {
             <input type="range" id="li-falloff" min="0.5" max="5" step="0.1" value="${p.falloff}" class="light-slider">
             <span id="li-falloff-val" class="prop-val">${p.falloff.toFixed(1)}</span>
         </div>
-        ${_shadowBlockHTML(p)}`;
+        <div class="prop-row" style="margin-top:4px;">
+            <span class="prop-label">Cast Shadows</span>
+            <input type="checkbox" id="li-cast-shadows" ${p.castShadows ? 'checked' : ''} style="accent-color:#facc15;width:14px;height:14px;">
+        </div>`;
     } else if (type === 'spot') {
         typeSpecific = `
         <div class="prop-row">
@@ -1124,7 +784,10 @@ export function buildLightInspectorHTML(obj) {
             <input type="range" id="li-falloff" min="0.5" max="5" step="0.1" value="${p.falloff}" class="light-slider">
             <span id="li-falloff-val" class="prop-val">${p.falloff.toFixed(1)}</span>
         </div>
-        ${_shadowBlockHTML(p)}`;
+        <div class="prop-row" style="margin-top:4px;">
+            <span class="prop-label">Cast Shadows</span>
+            <input type="checkbox" id="li-cast-shadows" ${p.castShadows ? 'checked' : ''} style="accent-color:#facc15;width:14px;height:14px;">
+        </div>`;
     } else if (type === 'directional') {
         typeSpecific = `
         <div class="prop-row">
@@ -1209,19 +872,7 @@ export function bindLightInspector(obj) {
     });
 
     const cs = document.getElementById('li-cast-shadows');
-    if (cs) cs.addEventListener('change', () => {
-        p.castShadows = cs.checked;
-        const wrap = document.getElementById('li-shadow-controls');
-        if (wrap) wrap.style.cssText = p.castShadows ? '' : 'opacity:.45;pointer-events:none;';
-    });
-
-    const shCol = document.getElementById('li-sh-color');
-    if (shCol) shCol.addEventListener('input', () => {
-        p.shadowColor = parseInt(shCol.value.replace('#', ''), 16);
-    });
-
-    const anim = document.getElementById('li-animate');
-    if (anim) anim.addEventListener('change', () => { p.animate = anim.checked; });
+    if (cs) cs.addEventListener('change', () => { p.castShadows = cs.checked; });
 
     bind('li-intensity', 'intensity', parseFloat, 'li-intensity-val', v => v.toFixed(2));
     bind('li-radius',    'radius',    parseFloat, 'li-radius-val',    v => v + 'px');
@@ -1231,297 +882,9 @@ export function bindLightInspector(obj) {
     bind('li-softness',  'softness',  parseFloat, 'li-softness-val',  v => v.toFixed(2));
     bind('li-width',     'width',     parseFloat, 'li-width-val',     v => v + 'px');
     bind('li-height',    'height',    parseFloat, 'li-height-val',    v => v + 'px');
-    // Shadow advanced
-    bind('li-sh-strength', 'shadowStrength', parseFloat, 'li-sh-strength-val', v => v.toFixed(2));
-    bind('li-sh-softness', 'shadowSoftness', parseFloat, 'li-sh-softness-val', v => v.toFixed(1) + 'px');
-    bind('li-sh-samples',  'shadowSamples',  v => parseInt(v, 10), 'li-sh-samples-val', v => String(v));
-    bind('li-sh-size',     'shadowSize',     parseFloat, 'li-sh-size-val',     v => v.toFixed(1) + 'px');
-    bind('li-sh-bias',     'shadowBias',     parseFloat, 'li-sh-bias-val',     v => v.toFixed(1));
-}
-
-// ============================================================
-//  WORLD LIGHTING PANEL  (global ambient + global shadow)
-// ============================================================
-export function buildWorldLightingHTML() {
-    const cfg = getLightingSettings();
-    const toHex = c => '#' + (c >>> 0).toString(16).padStart(6, '0').slice(-6);
-    return `
-    <div class="component-block" id="world-lighting-block">
-        <div class="component-header">
-            <input type="checkbox" id="wl-enabled" ${cfg.enabled ? 'checked' : ''} style="accent-color:#facc15;">
-            <svg viewBox="0 0 24 24" class="comp-icon" style="color:#facc15;"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1l2.1-2.1M17 7l2.1-2.1"/></svg>
-            <span style="font-weight:600; color:#facc15;">World Lighting</span>
-        </div>
-        <div class="component-body">
-            <div class="prop-row"><span class="prop-label">Ambient</span>
-                <input type="color" id="wl-amb-color" value="${toHex(cfg.ambient)}"></div>
-            <div class="prop-row"><span class="prop-label">Darkness</span>
-                <input type="range" id="wl-darkness" min="0" max="1" step="0.01" value="${cfg.darkness}" class="light-slider">
-                <span id="wl-darkness-val" class="prop-val">${cfg.darkness.toFixed(2)}</span></div>
-            <div class="prop-row"><span class="prop-label">Shadow Softness ×</span>
-                <input type="range" id="wl-shmult" min="0" max="3" step="0.05" value="${cfg.shadowMult}" class="light-slider">
-                <span id="wl-shmult-val" class="prop-val">${cfg.shadowMult.toFixed(2)}</span></div>
-            <div class="prop-row"><span class="prop-label">Shadow Quality</span>
-                <input type="range" id="wl-shq" min="0.5" max="2" step="0.05" value="${cfg.shadowQuality}" class="light-slider">
-                <span id="wl-shq-val" class="prop-val">${cfg.shadowQuality.toFixed(2)}</span></div>
-        </div>
-    </div>
-
-    `;
-}
-
-export function bindWorldLighting() {
-    const cfg = getLightingSettings();
-    const en = document.getElementById('wl-enabled');
-    if (en) en.addEventListener('change', () => { cfg.enabled = en.checked; });
-    const ac = document.getElementById('wl-amb-color');
-    if (ac) ac.addEventListener('input', () => { cfg.ambient = parseInt(ac.value.replace('#',''), 16); });
-    const wireRange = (id, prop, valId, fmt) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.addEventListener('input', () => {
-            cfg[prop] = parseFloat(el.value);
-            const v = document.getElementById(valId);
-            if (v) v.textContent = fmt(cfg[prop]);
-        });
-    };
-    wireRange('wl-darkness',  'darkness',     'wl-darkness-val',  v => v.toFixed(2));
-    wireRange('wl-shmult',    'shadowMult',   'wl-shmult-val',    v => v.toFixed(2));
-    wireRange('wl-shq',       'shadowQuality','wl-shq-val',       v => v.toFixed(2));
 }
 
 // ── Snapshot helpers ─────────────────────────────────────────
-// ============================================================
-//  Fog GameObject — addable / removable like a Light
-// ============================================================
-export function defaultFogProps() {
-    return {
-        enabled: true,
-        color:        0xC8D4E8,
-        density:      0.45,
-        scale:        1.4,
-        speed:        0.06,
-        verticalFade: 0.35,
-        octaves:      5,    // FBM detail layers (1..8)
-        contrast:     1.0,  // wisp sharpness (0.2..3)
-        brightness:   1.0,  // color multiplier
-        detail:       0.25, // high-frequency mix (0..1)
-        windAngle:    25,   // scroll direction in degrees
-        maxAlpha:     0.55, // opacity cap — keeps sprites visible
-    };
-}
-
-export function createFog(x = 0, y = 0) {
-    const container = new PIXI.Container();
-    container.x = x; container.y = y;
-    container.isFog    = true;
-    container.fogProps = defaultFogProps();
-    container.animations = [];
-    container.activeAnimIndex = 0;
-    container.unityZ = 0;
-
-    // Unique label
-    let n = 1;
-    const used = new Set(state.gameObjects.map(o => o.label));
-    let lbl = 'Fog';
-    while (used.has(lbl)) lbl = 'Fog ' + (++n);
-    container.label = lbl;
-
-    // Editor helper — small icon so it's visible/selectable in scene
-    const g = new PIXI.Graphics();
-    g.lineStyle(2, 0xa3b8d8, 0.95);
-    g.beginFill(0x1a2540, 0.55);
-    g.drawCircle(0, 0, 18);
-    g.endFill();
-    g.lineStyle(2, 0xa3b8d8, 0.85);
-    g.moveTo(-12, -4); g.lineTo(12, -4);
-    g.moveTo(-14,  2); g.lineTo(14,  2);
-    g.moveTo(-10,  8); g.lineTo(10,  8);
-    container.addChild(g);
-    container._fogHelper = g;
-
-    state.sceneContainer.addChild(container);
-    state.gameObjects.push(container);
-
-    _makeLightSelectable(container);
-
-    import('./engine.objects.js').then(m => m.selectObject(container));
-    import('./engine.ui.js').then(m => { m.refreshHierarchy(); });
-    return container;
-}
-
-export function buildFogInspectorHTML(obj) {
-    if (!obj?.isFog) return '';
-    const p = obj.fogProps;
-    const toHex = c => '#' + (c >>> 0).toString(16).padStart(6, '0').slice(-6);
-
-    const sliderRow = (label, id, min, max, step, val, fmt, tip='') => `
-        <div class="prop-row" style="flex-direction:column;align-items:stretch;gap:2px;padding:5px 0;border-bottom:1px solid #1a2333;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
-                <span class="prop-label" style="font-size:11px;color:#9ab;">${label}</span>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span id="${id}-val" style="font-family:monospace;font-size:11px;color:#cde;min-width:38px;text-align:right;">${fmt(val)}</span>
-                    <input type="number" id="${id}-num" min="${min}" max="${max}" step="${step}" value="${val}"
-                        style="width:52px;background:#0d1520;border:1px solid #2a3a4a;border-radius:3px;color:#cde;font-size:11px;padding:1px 4px;text-align:right;">
-                </div>
-            </div>
-            <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${val}" class="light-slider" style="width:100%;">
-            ${tip ? `<div style="font-size:9.5px;color:#556;margin-top:1px;">${tip}</div>` : ''}
-        </div>`;
-
-    return `
-    <div class="component-block" style="border-left:3px solid #6890b8;">
-        <div class="component-header" style="background:#0e1c2e;">
-            <input type="checkbox" id="fog-enabled" ${p.enabled ? 'checked' : ''} style="accent-color:#a3b8d8;width:14px;height:14px;">
-            <svg viewBox="0 0 24 24" class="comp-icon" style="color:#7aaad8;"><path d="M3 8h12M3 14h18M5 20h14M5 4h10" stroke="currentColor" stroke-width="2" fill="none"/></svg>
-            <span style="font-weight:700;color:#a3c8e8;letter-spacing:.5px;">Dynamic Fog  <span style="font-weight:400;font-size:10px;color:#5a7a9a;">(GPU Shader)</span></span>
-        </div>
-        <div class="component-body" style="padding:0 8px 8px;">
-
-            <!-- PRESETS -->
-            <div style="padding:6px 0 4px;border-bottom:1px solid #1a2333;">
-                <div style="font-size:10px;color:#6a8aaa;margin-bottom:4px;text-transform:uppercase;letter-spacing:.8px;">Quick Presets</div>
-                <div style="display:flex;flex-wrap:wrap;gap:3px;">
-                    <button data-fog-preset="thin"    style="flex:1;min-width:60px;background:#0d1928;border:1px solid #2a4060;color:#7aaad8;border-radius:3px;padding:3px 6px;font-size:10px;cursor:pointer;">🌫 Thin</button>
-                    <button data-fog-preset="thick"   style="flex:1;min-width:60px;background:#0d1928;border:1px solid #2a4060;color:#7aaad8;border-radius:3px;padding:3px 6px;font-size:10px;cursor:pointer;">☁️ Thick</button>
-                    <button data-fog-preset="night"   style="flex:1;min-width:60px;background:#0d1928;border:1px solid #2a4060;color:#7aaad8;border-radius:3px;padding:3px 6px;font-size:10px;cursor:pointer;">🌑 Night</button>
-                    <button data-fog-preset="mystic"  style="flex:1;min-width:60px;background:#0d1928;border:1px solid #2a4060;color:#b07ad8;border-radius:3px;padding:3px 6px;font-size:10px;cursor:pointer;">✨ Mystic</button>
-                    <button data-fog-preset="desert"  style="flex:1;min-width:60px;background:#0d1928;border:1px solid #2a4060;color:#d8b07a;border-radius:3px;padding:3px 6px;font-size:10px;cursor:pointer;">🏜 Desert</button>
-                    <button data-fog-preset="reset"   style="flex:1;min-width:60px;background:#1a0d0d;border:1px solid #4a2020;color:#c87a7a;border-radius:3px;padding:3px 6px;font-size:10px;cursor:pointer;">↺ Reset</button>
-                </div>
-            </div>
-
-            <!-- COLOR -->
-            <div class="prop-row" style="padding:6px 0;border-bottom:1px solid #1a2333;">
-                <span class="prop-label" style="font-size:11px;color:#9ab;">Fog Color</span>
-                <div style="display:flex;align-items:center;gap:6px;">
-                    <input type="color" id="fog-color" value="${toHex(p.color)}" style="width:36px;height:24px;border:none;background:none;cursor:pointer;padding:0;">
-                    <input type="text" id="fog-color-hex" value="${toHex(p.color)}"
-                        style="width:70px;background:#0d1520;border:1px solid #2a3a4a;border-radius:3px;color:#cde;font-size:11px;font-family:monospace;padding:2px 5px;">
-                </div>
-            </div>
-
-            <!-- MAIN CONTROLS -->
-            <div style="font-size:10px;color:#6a8aaa;padding:6px 0 2px;text-transform:uppercase;letter-spacing:.8px;">Shape &amp; Motion</div>
-            ${sliderRow('Density', 'fog-density', 0, 1.5, 0.01, p.density, v=>v.toFixed(2), 'How opaque / thick the fog appears')}
-            ${sliderRow('Scale', 'fog-scale', 0.2, 6, 0.05, p.scale, v=>v.toFixed(2), 'Size of fog clouds — larger = softer blobs')}
-            ${sliderRow('Speed', 'fog-speed', 0, 1, 0.005, p.speed, v=>v.toFixed(3), 'Scroll/drift speed of the fog layer')}
-            ${sliderRow('Wind Direction', 'fog-wind', 0, 360, 1, p.windAngle, v=>(v|0)+'°', 'Angle the fog drifts toward (0 = right)')}
-            ${sliderRow('Vertical Fade', 'fog-vfade', 0, 1, 0.01, p.verticalFade, v=>v.toFixed(2), 'Fade fog toward top of screen (0 = none)')}
-
-            <div style="font-size:10px;color:#6a8aaa;padding:6px 0 2px;text-transform:uppercase;letter-spacing:.8px;">Look &amp; Detail</div>
-            ${sliderRow('Contrast', 'fog-contrast', 0.2, 3, 0.01, p.contrast, v=>v.toFixed(2), 'Edge sharpness of fog wisps')}
-            ${sliderRow('Brightness', 'fog-bright', 0.2, 2, 0.01, p.brightness, v=>v.toFixed(2), 'Overall luminance multiplier')}
-            ${sliderRow('Detail', 'fog-detail', 0, 1, 0.01, p.detail, v=>v.toFixed(2), 'High-frequency texture mix — adds wispy tendrils')}
-            ${sliderRow('Octaves (FBM)', 'fog-oct', 1, 8, 1, p.octaves, v=>String(v|0), 'Fractal detail layers — higher = more complex (costs GPU)')}
-
-            <div style="font-size:10px;color:#6a8aaa;padding:6px 0 2px;text-transform:uppercase;letter-spacing:.8px;">Opacity</div>
-            ${sliderRow('Max Opacity', 'fog-maxa', 0.05, 1.0, 0.01, p.maxAlpha, v=>v.toFixed(2), 'Hard cap so sprites stay visible beneath fog')}
-
-        </div>
-    </div>`;
-}
-
-export function bindFogInspector(obj) {
-    if (!obj?.isFog) return;
-    const p = obj.fogProps;
-
-    // Enabled toggle
-    const en = document.getElementById('fog-enabled');
-    if (en) en.addEventListener('change', () => { p.enabled = en.checked; });
-
-    // Color — sync color picker ↔ hex text input
-    const col    = document.getElementById('fog-color');
-    const colHex = document.getElementById('fog-color-hex');
-    if (col) col.addEventListener('input', () => {
-        p.color = parseInt(col.value.replace('#',''), 16);
-        if (colHex) colHex.value = col.value;
-    });
-    if (colHex) colHex.addEventListener('input', () => {
-        const v = colHex.value.replace(/[^0-9a-fA-F]/g,'').slice(0,6);
-        if (v.length === 6) {
-            p.color = parseInt(v, 16);
-            if (col) col.value = '#' + v;
-        }
-    });
-
-    // Generic slider + number input wiring
-    const wire = (id, prop, valId, fmt) => {
-        const slider = document.getElementById(id);
-        const numInp = document.getElementById(id + '-num');
-        const valEl  = document.getElementById(valId);
-        const apply  = rawVal => {
-            const min  = parseFloat(slider?.min  ?? '-Infinity');
-            const max  = parseFloat(slider?.max  ??  'Infinity');
-            const step = parseFloat(slider?.step ?? '0.01');
-            let v = parseFloat(rawVal);
-            if (isNaN(v)) return;
-            v = Math.max(min, Math.min(max, v));
-            // Snap to step for integer-like props (octaves)
-            if (step >= 1) v = Math.round(v);
-            p[prop] = v;
-            if (slider) slider.value = v;
-            if (numInp) numInp.value  = v;
-            if (valEl)  valEl.textContent = fmt(p[prop]);
-        };
-        if (slider) slider.addEventListener('input', () => apply(slider.value));
-        if (numInp) numInp.addEventListener('input', () => apply(numInp.value));
-    };
-
-    wire('fog-density', 'density',     'fog-density-val', v => v.toFixed(2));
-    wire('fog-scale',   'scale',       'fog-scale-val',   v => v.toFixed(2));
-    wire('fog-speed',   'speed',       'fog-speed-val',   v => v.toFixed(3));
-    wire('fog-vfade',   'verticalFade','fog-vfade-val',   v => v.toFixed(2));
-    wire('fog-oct',     'octaves',     'fog-oct-val',     v => String(v|0));
-    wire('fog-contrast','contrast',    'fog-contrast-val',v => v.toFixed(2));
-    wire('fog-bright',  'brightness',  'fog-bright-val',  v => v.toFixed(2));
-    wire('fog-detail',  'detail',      'fog-detail-val',  v => v.toFixed(2));
-    wire('fog-wind',    'windAngle',   'fog-wind-val',    v => (v|0) + '°');
-    wire('fog-maxa',    'maxAlpha',    'fog-maxa-val',    v => v.toFixed(2));
-
-    // Preset helper — sets p values then refreshes all inputs
-    const applyPreset = preset => {
-        const presets = {
-            thin:   { enabled:true, color:0xd0dce8, density:0.20, scale:2.0, speed:0.04, verticalFade:0.15, octaves:4, contrast:0.8, brightness:1.1, detail:0.1,  windAngle:15,  maxAlpha:0.30 },
-            thick:  { enabled:true, color:0x8898a8, density:1.10, scale:1.2, speed:0.08, verticalFade:0.50, octaves:6, contrast:1.4, brightness:0.9, detail:0.35, windAngle:30,  maxAlpha:0.80 },
-            night:  { enabled:true, color:0x101830, density:0.70, scale:1.8, speed:0.03, verticalFade:0.40, octaves:5, contrast:1.2, brightness:0.6, detail:0.20, windAngle:200, maxAlpha:0.65 },
-            mystic: { enabled:true, color:0x7040c0, density:0.55, scale:1.5, speed:0.12, verticalFade:0.30, octaves:7, contrast:1.8, brightness:1.3, detail:0.55, windAngle:90,  maxAlpha:0.60 },
-            desert: { enabled:true, color:0xd0a060, density:0.40, scale:2.5, speed:0.18, verticalFade:0.10, octaves:3, contrast:0.9, brightness:1.4, detail:0.15, windAngle:45,  maxAlpha:0.45 },
-            reset:  defaultFogProps(),
-        };
-        const src = presets[preset];
-        if (!src) return;
-        Object.assign(p, src);
-        // Refresh all UI controls
-        if (en)     { en.checked = p.enabled; }
-        const hex = '#' + (p.color >>> 0).toString(16).padStart(6,'0').slice(-6);
-        if (col)    col.value    = hex;
-        if (colHex) colHex.value = hex;
-        const refresh = (id, prop, fmt) => {
-            const s = document.getElementById(id);
-            const n = document.getElementById(id + '-num');
-            const v = document.getElementById(id + '-val');
-            if (s) s.value = p[prop];
-            if (n) n.value = p[prop];
-            if (v) v.textContent = fmt(p[prop]);
-        };
-        refresh('fog-density', 'density',     v => v.toFixed(2));
-        refresh('fog-scale',   'scale',        v => v.toFixed(2));
-        refresh('fog-speed',   'speed',        v => v.toFixed(3));
-        refresh('fog-vfade',   'verticalFade', v => v.toFixed(2));
-        refresh('fog-oct',     'octaves',      v => String(v|0));
-        refresh('fog-contrast','contrast',     v => v.toFixed(2));
-        refresh('fog-bright',  'brightness',   v => v.toFixed(2));
-        refresh('fog-detail',  'detail',       v => v.toFixed(2));
-        refresh('fog-wind',    'windAngle',    v => (v|0) + '°');
-        refresh('fog-maxa',    'maxAlpha',     v => v.toFixed(2));
-    };
-
-    document.querySelectorAll('[data-fog-preset]').forEach(btn => {
-        btn.addEventListener('click', () => applyPreset(btn.dataset.fogPreset));
-    });
-}
-
 export function snapshotLight(obj) {
     return {
         isLight: true, lightType: obj.lightType,
@@ -1535,10 +898,11 @@ export async function restoreLight(s) {
     obj.label = s.label;
     obj.unityZ = s.unityZ || 0;
     obj.lightProps = JSON.parse(JSON.stringify(s.lightProps));
-    // Backfill any missing keys (older snapshots)
-    const def = defaultLightProps(s.lightType);
-    for (const k in def) if (obj.lightProps[k] === undefined) obj.lightProps[k] = def[k];
-    _ensureShadowDefaults(obj.lightProps);
+    // Ensure castShadows default exists for older snapshots
+    if (obj.lightProps.castShadows === undefined &&
+        (s.lightType === 'point' || s.lightType === 'spot')) {
+        obj.lightProps.castShadows = false;
+    }
     _buildLightHelper(obj);
     return obj;
 }

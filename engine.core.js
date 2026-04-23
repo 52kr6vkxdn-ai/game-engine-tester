@@ -20,9 +20,8 @@ import { initScenes, toggleSceneDropdown } from './engine.scenes.js';
 import { undo, redo, updateUndoButtons }   from './engine.history.js';
 import { enterPlayMode, pausePlayMode, stopPlayMode, drawCameraBounds } from './engine.playmode.js';
 import { saveProject, loadProject, newProject } from './engine.project.js';
-import { createLight, createFog, LIGHT_TYPES, initLighting, buildWorldLightingHTML, bindWorldLighting } from './engine.lights.js';
+import { createLight, LIGHT_TYPES, initLighting } from './engine.lights.js';
 import { createTilemap } from './engine.tilemap.js';
-import { createTerrain } from './engine.terrain.js';
 
 export function startEngine() {
     if (typeof PIXI === 'undefined') {
@@ -204,6 +203,21 @@ function initMenus() {
         });
     }
 
+    // Save as Prefab button
+    const prefabBtn = document.getElementById('btn-save-prefab');
+    if (prefabBtn) {
+        prefabBtn.addEventListener('click', () => {
+            if (!state.gameObject) return;
+            import('./engine.prefabs.js').then(m => {
+                const prefab = m.saveAsPrefab(state.gameObject);
+                if (prefab) {
+                    syncPixiToInspector();
+                    document.getElementById('tab-prefabs-btn')?.click();
+                }
+            });
+        });
+    }
+
     // Apply to THIS prefab template only (new Unity-style button)
     const applyThisBtn = document.getElementById('btn-prefab-apply-this');
     if (applyThisBtn) {
@@ -244,33 +258,6 @@ function initMenus() {
         });
     }
 
-    // World Lighting popover (toolbar button)
-    const wlBtn = document.getElementById('btn-world-lighting');
-    if (wlBtn) {
-        wlBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const existing = document.getElementById('world-lighting-popover');
-            if (existing) { existing.remove(); return; }
-            const pop = document.createElement('div');
-            pop.id = 'world-lighting-popover';
-            pop.className = 'world-lighting-popover';
-            pop.innerHTML = buildWorldLightingHTML();
-            document.body.appendChild(pop);
-            const rect = wlBtn.getBoundingClientRect();
-            pop.style.top  = (rect.bottom + 6) + 'px';
-            pop.style.left = Math.max(8, rect.right - 280) + 'px';
-            pop.addEventListener('click', ev => ev.stopPropagation());
-            bindWorldLighting();
-            const onAway = (ev) => {
-                if (!pop.contains(ev.target) && ev.target !== wlBtn) {
-                    pop.remove();
-                    document.removeEventListener('mousedown', onAway);
-                }
-            };
-            setTimeout(() => document.addEventListener('mousedown', onAway), 0);
-        });
-    }
-
     // GameObject menu — lights + tilemap
     const goBtn = document.getElementById('menu-gameobject');
     if (goBtn) {
@@ -288,16 +275,6 @@ function initMenus() {
                 {
                     label: '▦  Tilemap',
                     action: () => createTilemap(),
-                },
-                {
-                    label: '⛰  Terrain Brush',
-                    action: () => createTerrain(),
-                },
-                { separator: true },
-                { label: '── Effects ──', disabled: true },
-                {
-                    label: '🌫  Dynamic Fog',
-                    action: () => createFog(),
                 },
             ]);
         });
@@ -419,18 +396,6 @@ function _copySelected() {
             label: obj.label, x: obj.x + 25, y: obj.y + 25, unityZ: obj.unityZ || 0,
             lightProps: JSON.parse(JSON.stringify(obj.lightProps)),
         };
-    } else if (obj.isFog) {
-        state.clipboard = {
-            isFog: true,
-            label: obj.label, x: obj.x + 25, y: obj.y + 25, unityZ: obj.unityZ || 0,
-            fogProps: JSON.parse(JSON.stringify(obj.fogProps)),
-        };
-    } else if (obj.isTerrain) {
-        state.clipboard = {
-            isTerrain: true,
-            label: obj.label, x: obj.x + 25, y: obj.y + 25, unityZ: obj.unityZ || 0,
-            terrainData: { ...obj.terrainData, tiles: Array.from(obj.terrainData.tiles), images: obj.terrainData.images.slice() },
-        };
     } else if (obj.isTilemap) {
         state.clipboard = {
             isTilemap: true,
@@ -474,18 +439,6 @@ function _pasteObject() {
     if (cb.isTilemap) {
         import('./engine.tilemap.js').then(({ restoreTilemap }) => {
             restoreTilemap({ ...cb }).then(obj => {
-                if (!obj) return;
-                obj.label = cb.label + ' (copy)';
-                state.clipboard = { ...cb, x: cb.x + 25, y: cb.y + 25 };
-                _logConsole('⎗ Pasted: ' + obj.label, '#8f8');
-            });
-        });
-        return;
-    }
-    // Terrain paste
-    if (cb.isTerrain) {
-        import('./engine.terrain.js').then(({ restoreTerrain }) => {
-            restoreTerrain({ ...cb }).then(obj => {
                 if (!obj) return;
                 obj.label = cb.label + ' (copy)';
                 state.clipboard = { ...cb, x: cb.x + 25, y: cb.y + 25 };

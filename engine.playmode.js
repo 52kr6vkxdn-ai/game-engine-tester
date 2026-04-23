@@ -238,8 +238,6 @@ function _hideAllGizmosAndGrid() {
         if (obj._gizmoContainer) obj._gizmoContainer.visible = false;
         if (obj.isLight && obj._lightHelper) obj._lightHelper.visible = false;
         if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = false;
-        if (obj.isFog && obj._fogHelper) obj._fogHelper.visible = false;
-        if (obj.isTerrain && obj._terrainHelper) obj._terrainHelper.visible = false;
     });
     if (state.gridGraphics) state.gridGraphics.visible = false;
     if (state.spriteBox)    state.spriteBox.visible    = false;
@@ -325,18 +323,6 @@ function _snapshotScene() {
                     lightProps: JSON.parse(JSON.stringify(obj.lightProps)),
                 };
             }
-            if (obj.isFog) {
-                return {
-                    isFog: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
-                    fogProps: JSON.parse(JSON.stringify(obj.fogProps)),
-                };
-            }
-            if (obj.isTerrain) {
-                return {
-                    isTerrain: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
-                    terrainData: { ...obj.terrainData, tiles: Array.from(obj.terrainData.tiles), images: obj.terrainData.images.slice() },
-                };
-            }
             if (obj.isTilemap) {
                 return {
                     isTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
@@ -379,18 +365,6 @@ function _restoreScene(snap) {
                 _buildLightHelper(obj);
                 return obj;
             });
-        }
-        if (s.isFog) {
-            return import('./engine.lights.js').then(({ createFog }) => {
-                const obj = createFog(s.x, s.y);
-                if (!obj) return null;
-                obj.label = s.label; obj.unityZ = s.unityZ || 0;
-                obj.fogProps = JSON.parse(JSON.stringify(s.fogProps));
-                return obj;
-            });
-        }
-        if (s.isTerrain) {
-            return import('./engine.terrain.js').then(({ restoreTerrain }) => restoreTerrain(s));
         }
         if (s.isTilemap) {
             return import('./engine.tilemap.js').then(({ restoreTilemap }) => restoreTilemap(s));
@@ -456,8 +430,6 @@ export function stopRuntimeAnimations() {
         // Restore light helpers
         if (obj.isLight && obj._lightHelper) obj._lightHelper.visible = true;
         if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = true;
-        if (obj.isFog && obj._fogHelper) obj._fogHelper.visible = true;
-        if (obj.isTerrain && obj._terrainHelper) obj._terrainHelper.visible = true;
     }
 }
 
