@@ -95,6 +95,12 @@ function _saveCurrentScene() {
                 lightProps: JSON.parse(JSON.stringify(obj.lightProps)),
             };
         }
+        if (obj.isFog) {
+            return {
+                isFog: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                fogProps: JSON.parse(JSON.stringify(obj.fogProps)),
+            };
+        }
         if (obj.isTilemap) {
             return {
                 isTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
@@ -157,6 +163,14 @@ function _loadScene(index) {
                     obj.label = s.label; obj.unityZ = s.unityZ || 0;
                     obj.lightProps = JSON.parse(JSON.stringify(s.lightProps));
                     _buildLightHelper(obj);
+                });
+            }
+            if (s.isFog) {
+                return import('./engine.lights.js').then(({ createFog }) => {
+                    const obj = createFog(s.x, s.y);
+                    if (!obj) return;
+                    obj.label = s.label; obj.unityZ = s.unityZ || 0;
+                    obj.fogProps = JSON.parse(JSON.stringify(s.fogProps));
                 });
             }
             if (s.isTilemap) {

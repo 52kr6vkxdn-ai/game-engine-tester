@@ -20,7 +20,7 @@ import { initScenes, toggleSceneDropdown } from './engine.scenes.js';
 import { undo, redo, updateUndoButtons }   from './engine.history.js';
 import { enterPlayMode, pausePlayMode, stopPlayMode, drawCameraBounds } from './engine.playmode.js';
 import { saveProject, loadProject, newProject } from './engine.project.js';
-import { createLight, LIGHT_TYPES, initLighting } from './engine.lights.js';
+import { createLight, createFog, LIGHT_TYPES, initLighting, buildWorldLightingHTML, bindWorldLighting } from './engine.lights.js';
 import { createTilemap } from './engine.tilemap.js';
 
 export function startEngine() {
@@ -258,6 +258,33 @@ function initMenus() {
         });
     }
 
+    // World Lighting popover (toolbar button)
+    const wlBtn = document.getElementById('btn-world-lighting');
+    if (wlBtn) {
+        wlBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const existing = document.getElementById('world-lighting-popover');
+            if (existing) { existing.remove(); return; }
+            const pop = document.createElement('div');
+            pop.id = 'world-lighting-popover';
+            pop.className = 'world-lighting-popover';
+            pop.innerHTML = buildWorldLightingHTML();
+            document.body.appendChild(pop);
+            const rect = wlBtn.getBoundingClientRect();
+            pop.style.top  = (rect.bottom + 6) + 'px';
+            pop.style.left = Math.max(8, rect.right - 280) + 'px';
+            pop.addEventListener('click', ev => ev.stopPropagation());
+            bindWorldLighting();
+            const onAway = (ev) => {
+                if (!pop.contains(ev.target) && ev.target !== wlBtn) {
+                    pop.remove();
+                    document.removeEventListener('mousedown', onAway);
+                }
+            };
+            setTimeout(() => document.addEventListener('mousedown', onAway), 0);
+        });
+    }
+
     // GameObject menu — lights + tilemap
     const goBtn = document.getElementById('menu-gameobject');
     if (goBtn) {
@@ -275,6 +302,12 @@ function initMenus() {
                 {
                     label: '▦  Tilemap',
                     action: () => createTilemap(),
+                },
+                { separator: true },
+                { label: '── Effects ──', disabled: true },
+                {
+                    label: '🌫  Dynamic Fog',
+                    action: () => createFog(),
                 },
             ]);
         });

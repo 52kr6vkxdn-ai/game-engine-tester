@@ -533,3 +533,17 @@ input:focus, select:focus { outline: none; }
 
 /* ── Light inspector specifics ────────────────────────────── */
 #inspector-light-section .component-header { background: rgba(250,204,21,0.06); }
+
+/* ── World Lighting popover ──────────────────────────────── */
+.world-lighting-popover {
+    position: fixed; z-index: 10000;
+    width: 280px;
+    background: rgba(18,20,28,0.96);
+    backdrop-filter: blur(10px);
+    border: 1px solid #3A72A5;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    padding: 4px;
+}
+.world-lighting-popover .component-block { margin: 0; }
+.world-lighting-popover .component-header { background: rgba(250,204,21,0.06); }

@@ -45,6 +45,15 @@ export function syncPixiToInspector() {
         if (els.objName) els.objName.value = '';
         if (pfSection) pfSection.style.display = 'none';
         if (lightSection) lightSection.style.display = 'none';
+        // Clear the dynamic light/fog mount and restore row visibility
+        const lightMount = document.getElementById('light-inspector-mount');
+        if (lightMount) lightMount.innerHTML = '';
+        const rotRow   = document.getElementById('transform-rot-row');
+        const scaleRow = document.getElementById('transform-scale-row');
+        if (rotRow)   rotRow.style.display   = '';
+        if (scaleRow) scaleRow.style.display = '';
+        if (spriteSection) spriteSection.style.display = '';
+        if (animSection)   animSection.style.display   = '';
         return;
     }
 
@@ -67,6 +76,24 @@ export function syncPixiToInspector() {
             import('./engine.lights.js').then(m => {
                 lightMount.innerHTML = m.buildLightInspectorHTML(go);
                 m.bindLightInspector(go);
+            });
+        }
+        return;
+    }
+
+    if (go.isFog) {
+        const rotRow   = document.getElementById('transform-rot-row');
+        const scaleRow = document.getElementById('transform-scale-row');
+        if (rotRow)   rotRow.style.display   = 'none';
+        if (scaleRow) scaleRow.style.display = 'none';
+        if (spriteSection) spriteSection.style.display = 'none';
+        if (animSection)   animSection.style.display   = 'none';
+        if (pfSection)     pfSection.style.display      = 'none';
+        const lightMount = document.getElementById('light-inspector-mount');
+        if (lightMount) {
+            import('./engine.lights.js').then(m => {
+                lightMount.innerHTML = m.buildFogInspectorHTML(go);
+                m.bindFogInspector(go);
             });
         }
         return;
@@ -157,7 +184,7 @@ export function syncInspectorToPixi() {
     go.unityZ = newZ;
 
     // Rotation and scale only for sprites (not lights or tilemaps)
-    if (!go.isLight && !go.isTilemap) {
+    if (!go.isLight && !go.isTilemap && !go.isFog) {
         const newRot = (parseFloat(els.rz?.value) || 0) * -Math.PI / 180;
         const newSX  = parseFloat(els.sx?.value) || 1;
         const newSY  = parseFloat(els.sy?.value) || 1;
@@ -332,8 +359,12 @@ export function refreshHierarchy() {
             icon.style.cssText='width:14px;height:14px;fill:none;stroke:#4ade80;stroke-width:2;flex-shrink:0;';
             icon.innerHTML='<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>';
             left.appendChild(icon);
+        } else if (obj.isFog) {
+            const span = document.createElement('span');
+            span.style.cssText = 'font-size:12px;flex-shrink:0;';
+            span.textContent = '🌫';
+            left.appendChild(span);
         } else {
-            const idleAnim  = obj.animations?.find(a => a.isIdle) || obj.animations?.[obj.activeAnimIndex || 0];
             const idleFrame = idleAnim?.frames?.[0]?.dataURL;
             if (idleFrame) {
                 const thumb = document.createElement('img');
@@ -364,6 +395,15 @@ export function refreshHierarchy() {
             badge.textContent = `${obj.tilemapData.cols}×${obj.tilemapData.rows}`;
             left.appendChild(badge);
         }
+        if (obj.isFog) {
+            const badge = document.createElement('span');
+            badge.className = 'tree-item-light-badge';
+            badge.style.background   = 'rgba(163,184,216,0.12)';
+            badge.style.color        = '#a3b8d8';
+            badge.style.borderColor  = 'rgba(163,184,216,0.3)';
+            badge.textContent = 'fog';
+            left.appendChild(badge);
+        }
         item.appendChild(left);
 
         // Z-order buttons
@@ -375,8 +415,8 @@ export function refreshHierarchy() {
         item.appendChild(zBtns);
 
         item.addEventListener('click', () => import('./engine.objects.js').then(m => m.selectObject(obj)));
-        // Double-click: open animation editor for sprites, not for lights
-        if (!obj.isLight) {
+        // Double-click: open animation editor for sprites only (not lights, fog, tilemaps)
+        if (!obj.isLight && !obj.isFog && !obj.isTilemap) {
             item.addEventListener('dblclick', () => {
                 import('./engine.objects.js').then(m => m.selectObject(obj));
                 import('./engine.animator.js').then(m => m.openAnimationEditor(obj));

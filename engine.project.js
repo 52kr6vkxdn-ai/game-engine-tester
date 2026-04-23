@@ -138,6 +138,12 @@ function _saveActiveScene() {
                     lightProps: JSON.parse(JSON.stringify(obj.lightProps)),
                 };
             }
+            if (obj.isFog) {
+                return {
+                    isFog: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                    fogProps: JSON.parse(JSON.stringify(obj.fogProps)),
+                };
+            }
             if (obj.isTilemap) {
                 return {
                     isTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
