@@ -22,9 +22,11 @@ export function defaultLightProps(type) {
     };
     switch (type) {
         case 'point':
-            return { ...base, radius: 200, falloff: 2.0, castShadows: false };
+            return { ...base, radius: 200, falloff: 2.0, castShadows: false,
+                     shadowStrength: 0.72, shadowSoftness: 0, shadowBias: 0, shadowDistance: 1.0 };
         case 'spot':
-            return { ...base, radius: 250, angle: 45, falloff: 1.8, direction: 0, castShadows: false };
+            return { ...base, radius: 250, angle: 45, falloff: 1.8, direction: 0, castShadows: false,
+                     shadowStrength: 0.72, shadowSoftness: 0, shadowBias: 0, shadowDistance: 1.0 };
         case 'directional':
             return { ...base, angle: 0, softness: 0.3 };
         case 'area':
@@ -278,11 +280,15 @@ export function initLighting() {
     state.lightingMaskSprite = new PIXI.Sprite(state.lightingMaskRT);
     state.lightingMaskSprite.blendMode = PIXI.BLEND_MODES.MULTIPLY;
     state.lightingMaskSprite.eventMode = 'none';
+    state.lightingMaskSprite.interactive = false;
+    state.lightingMaskSprite.interactiveChildren = false;
 
     state.lightingGlowRT     = PIXI.RenderTexture.create({ width: w, height: h, resolution: res });
     state.lightingGlowSprite = new PIXI.Sprite(state.lightingGlowRT);
     state.lightingGlowSprite.blendMode = PIXI.BLEND_MODES.ADD;
     state.lightingGlowSprite.eventMode = 'none';
+    state.lightingGlowSprite.interactive = false;
+    state.lightingGlowSprite.interactiveChildren = false;
 
     // Sit on top of the scene container, below any future overlay UI
     app.stage.addChild(state.lightingMaskSprite);
@@ -324,6 +330,8 @@ function _ensureShadowCanvas() {
     state._shadowSprite = new PIXI.Sprite(state._shadowTex);
     state._shadowSprite.blendMode = PIXI.BLEND_MODES.MULTIPLY;
     state._shadowSprite.eventMode = 'none';
+    state._shadowSprite.interactive = false;
+    state._shadowSprite.interactiveChildren = false;
     // Insert between the mask and glow sprites
     const idx = state.app.stage.children.indexOf(state.lightingGlowSprite);
     state.app.stage.addChildAt(state._shadowSprite, idx);
@@ -464,35 +472,42 @@ function _renderShadowFrame(lights, occluders) {
         const pos = state.sceneContainer.toGlobal(new PIXI.Point(L.x, L.y));
         const lx  = pos.x, ly = pos.y;
         const camScale = state.sceneContainer.scale.x;
-        const radius   = (p.radius ?? 200) * camScale;
+        const radius   = (p.radius ?? 200) * camScale * (p.shadowDistance ?? 1.0);
+
+        // Shadow quality params
+        const strength  = p.shadowStrength  ?? 0.72;
+        const softness  = p.shadowSoftness  ?? 0;
+        const bias      = (p.shadowBias     ?? 0) * camScale;
 
         // Darken area within radius to shadow-gray, lit polygon will restore it
-        // Use a clipping/compositing trick:
-        // 1. Draw dark circle (shadow zone) with destination-in or manual polygon
-
         const poly = _buildVisibilityPolygon(lx, ly, radius, occluders, w, h);
         if (poly.length < 3) continue;
 
-        // Save state
         ctx.save();
 
-        // Draw the dark falloff disk first (this is the "shadow zone")
-        // We darken everything within radius, then cut out the lit polygon
-        const grd = ctx.createRadialGradient(lx, ly, 0, lx, ly, radius);
-        grd.addColorStop(0,   'rgba(0,0,0,0.72)');
-        grd.addColorStop(0.6, 'rgba(0,0,0,0.55)');
-        grd.addColorStop(1,   'rgba(0,0,0,0)');
+        // Radial gradient: shadow zone with configurable strength
+        const midStop  = Math.max(0, Math.min(1, 0.6 + softness * 0.4));
+        const fadeStop = Math.max(0, Math.min(1, 0.85 + softness * 0.15));
+        const grd = ctx.createRadialGradient(lx, ly, bias, lx, ly, radius);
+        grd.addColorStop(0,        `rgba(0,0,0,${strength.toFixed(3)})`);
+        grd.addColorStop(midStop,  `rgba(0,0,0,${(strength * 0.76).toFixed(3)})`);
+        grd.addColorStop(fadeStop, `rgba(0,0,0,${(strength * 0.3).toFixed(3)})`);
+        grd.addColorStop(1,        'rgba(0,0,0,0)');
         ctx.beginPath();
         ctx.arc(lx, ly, radius, 0, Math.PI * 2);
         ctx.fillStyle = grd;
         ctx.fill();
 
-        // Now cut out the visibility polygon using destination-out on a temp layer
-        // i.e. draw lit area brighter: paint white polygon on top (restores white = lit)
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.fillStyle = 'rgba(0,0,0,0.72)'; // match the center shadow strength
+        // Soft shadow: blur the visibility polygon edges when softness > 0
+        if (softness > 0) {
+            ctx.shadowBlur = softness * 18;
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        }
 
-        // Lit polygon
+        // Cut out the lit polygon (destination-out)
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = `rgba(0,0,0,${strength.toFixed(3)})`;
+
         ctx.beginPath();
         ctx.moveTo(poly[0].x, poly[0].y);
         for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
@@ -747,6 +762,10 @@ export function buildLightInspectorHTML(obj) {
 
     let typeSpecific = '';
     if (type === 'point') {
+        const ss = p.shadowStrength ?? 0.72;
+        const sf = p.shadowSoftness ?? 0;
+        const sb = p.shadowBias     ?? 0;
+        const sd = p.shadowDistance ?? 1.0;
         typeSpecific = `
         <div class="prop-row">
             <span class="prop-label">Radius</span>
@@ -761,8 +780,35 @@ export function buildLightInspectorHTML(obj) {
         <div class="prop-row" style="margin-top:4px;">
             <span class="prop-label">Cast Shadows</span>
             <input type="checkbox" id="li-cast-shadows" ${p.castShadows ? 'checked' : ''} style="accent-color:#facc15;width:14px;height:14px;">
+        </div>
+        <div id="li-shadow-quality-group" style="${p.castShadows ? '' : 'opacity:0.35;pointer-events:none;'}">
+            <div style="margin:6px 0 2px;font-size:9px;color:#facc15;letter-spacing:.5px;text-transform:uppercase;font-weight:600;">Shadow Quality</div>
+            <div class="prop-row">
+                <span class="prop-label">Strength</span>
+                <input type="range" id="li-shadow-strength" min="0" max="1" step="0.01" value="${ss}" class="light-slider">
+                <span id="li-shadow-strength-val" class="prop-val">${ss.toFixed(2)}</span>
+            </div>
+            <div class="prop-row">
+                <span class="prop-label">Softness</span>
+                <input type="range" id="li-shadow-softness" min="0" max="1" step="0.01" value="${sf}" class="light-slider">
+                <span id="li-shadow-softness-val" class="prop-val">${sf.toFixed(2)}</span>
+            </div>
+            <div class="prop-row">
+                <span class="prop-label">Bias</span>
+                <input type="range" id="li-shadow-bias" min="0" max="20" step="0.5" value="${sb}" class="light-slider">
+                <span id="li-shadow-bias-val" class="prop-val">${sb.toFixed(1)}</span>
+            </div>
+            <div class="prop-row">
+                <span class="prop-label">Distance</span>
+                <input type="range" id="li-shadow-distance" min="0.1" max="2" step="0.05" value="${sd}" class="light-slider">
+                <span id="li-shadow-distance-val" class="prop-val">${sd.toFixed(2)}×</span>
+            </div>
         </div>`;
     } else if (type === 'spot') {
+        const ss = p.shadowStrength ?? 0.72;
+        const sf = p.shadowSoftness ?? 0;
+        const sb = p.shadowBias     ?? 0;
+        const sd = p.shadowDistance ?? 1.0;
         typeSpecific = `
         <div class="prop-row">
             <span class="prop-label">Radius</span>
@@ -787,6 +833,29 @@ export function buildLightInspectorHTML(obj) {
         <div class="prop-row" style="margin-top:4px;">
             <span class="prop-label">Cast Shadows</span>
             <input type="checkbox" id="li-cast-shadows" ${p.castShadows ? 'checked' : ''} style="accent-color:#facc15;width:14px;height:14px;">
+        </div>
+        <div id="li-shadow-quality-group" style="${p.castShadows ? '' : 'opacity:0.35;pointer-events:none;'}">
+            <div style="margin:6px 0 2px;font-size:9px;color:#facc15;letter-spacing:.5px;text-transform:uppercase;font-weight:600;">Shadow Quality</div>
+            <div class="prop-row">
+                <span class="prop-label">Strength</span>
+                <input type="range" id="li-shadow-strength" min="0" max="1" step="0.01" value="${ss}" class="light-slider">
+                <span id="li-shadow-strength-val" class="prop-val">${ss.toFixed(2)}</span>
+            </div>
+            <div class="prop-row">
+                <span class="prop-label">Softness</span>
+                <input type="range" id="li-shadow-softness" min="0" max="1" step="0.01" value="${sf}" class="light-slider">
+                <span id="li-shadow-softness-val" class="prop-val">${sf.toFixed(2)}</span>
+            </div>
+            <div class="prop-row">
+                <span class="prop-label">Bias</span>
+                <input type="range" id="li-shadow-bias" min="0" max="20" step="0.5" value="${sb}" class="light-slider">
+                <span id="li-shadow-bias-val" class="prop-val">${sb.toFixed(1)}</span>
+            </div>
+            <div class="prop-row">
+                <span class="prop-label">Distance</span>
+                <input type="range" id="li-shadow-distance" min="0.1" max="2" step="0.05" value="${sd}" class="light-slider">
+                <span id="li-shadow-distance-val" class="prop-val">${sd.toFixed(2)}×</span>
+            </div>
         </div>`;
     } else if (type === 'directional') {
         typeSpecific = `
@@ -872,7 +941,16 @@ export function bindLightInspector(obj) {
     });
 
     const cs = document.getElementById('li-cast-shadows');
-    if (cs) cs.addEventListener('change', () => { p.castShadows = cs.checked; });
+    if (cs) cs.addEventListener('change', () => {
+        p.castShadows = cs.checked;
+        const g = document.getElementById('li-shadow-quality-group');
+        if (g) { g.style.opacity = p.castShadows ? '1' : '0.35'; g.style.pointerEvents = p.castShadows ? '' : 'none'; }
+    });
+
+    bind('li-shadow-strength', 'shadowStrength', parseFloat, 'li-shadow-strength-val', v => v.toFixed(2));
+    bind('li-shadow-softness', 'shadowSoftness', parseFloat, 'li-shadow-softness-val', v => v.toFixed(2));
+    bind('li-shadow-bias',     'shadowBias',     parseFloat, 'li-shadow-bias-val',     v => v.toFixed(1));
+    bind('li-shadow-distance', 'shadowDistance', parseFloat, 'li-shadow-distance-val', v => v.toFixed(2) + '×');
 
     bind('li-intensity', 'intensity', parseFloat, 'li-intensity-val', v => v.toFixed(2));
     bind('li-radius',    'radius',    parseFloat, 'li-radius-val',    v => v + 'px');
@@ -902,6 +980,13 @@ export async function restoreLight(s) {
     if (obj.lightProps.castShadows === undefined &&
         (s.lightType === 'point' || s.lightType === 'spot')) {
         obj.lightProps.castShadows = false;
+    }
+    // Default shadow quality fields for older snapshots
+    if (s.lightType === 'point' || s.lightType === 'spot') {
+        if (obj.lightProps.shadowStrength  === undefined) obj.lightProps.shadowStrength  = 0.72;
+        if (obj.lightProps.shadowSoftness  === undefined) obj.lightProps.shadowSoftness  = 0;
+        if (obj.lightProps.shadowBias      === undefined) obj.lightProps.shadowBias      = 0;
+        if (obj.lightProps.shadowDistance  === undefined) obj.lightProps.shadowDistance  = 1.0;
     }
     _buildLightHelper(obj);
     return obj;

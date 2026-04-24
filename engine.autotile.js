@@ -268,22 +268,66 @@ export function openAutoTileEditor(obj) {
               </select>
             </div>
 
-            <!-- Upload Images big button -->
+            <!-- Auto-Tile Spatial Layout -->
+            <div style="margin-bottom:6px;">
+              <div style="font-size:10px;color:#7a7e88;margin-bottom:8px;letter-spacing:.4px;font-weight:600;">TILE CONFIGURATIONS</div>
+
+              <div style="display:flex;gap:8px;align-items:flex-start;">
+                <!-- Vertical strip (left): top cap, pipe, bottom cap -->
+                <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">
+                  <div style="font-size:8px;color:#9ba0aa;text-align:center;margin-bottom:2px;letter-spacing:.3px;">VERT</div>
+                  <div class="at-thumb at-slot-cell" data-slot="1"  title="North only — bottom end cap"></div>
+                  <div class="at-thumb at-slot-cell" data-slot="5"  title="North + South — vertical pipe"></div>
+                  <div class="at-thumb at-slot-cell" data-slot="4"  title="South only — top end cap"></div>
+                </div>
+
+                <!-- 3x3 center grid: all 8 full neighbor combos -->
+                <div style="flex:1;">
+                  <div style="font-size:8px;color:#9ba0aa;text-align:center;margin-bottom:2px;letter-spacing:.3px;">NEIGHBORS (4-dir)</div>
+                  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
+                    <div class="at-thumb at-slot-cell" data-slot="9"  title="N+W — top-left inner corner"></div>
+                    <div class="at-thumb at-slot-cell" data-slot="13" title="N+E+W — T top"></div>
+                    <div class="at-thumb at-slot-cell" data-slot="11" title="N+E — top-right inner corner"></div>
+                    <div class="at-thumb at-slot-cell" data-slot="12" title="S+W — T left"></div>
+                    <div class="at-thumb at-slot-cell" data-slot="15" title="All 4 neighbors — cross / interior"></div>
+                    <div class="at-thumb at-slot-cell" data-slot="14" title="S+E — T right"></div>
+                    <div class="at-thumb at-slot-cell" data-slot="3"  title="N+E — bottom-left outer corner"></div>
+                    <div class="at-thumb at-slot-cell" data-slot="7"  title="S+E+W — T bottom"></div>
+                    <div class="at-thumb at-slot-cell" data-slot="6"  title="S+E — bottom-right outer corner"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Bottom row: horizontal strip + isolated tile -->
+              <div style="display:flex;gap:8px;align-items:flex-end;margin-top:6px;">
+                <!-- Horizontal strip -->
+                <div style="flex:1;">
+                  <div style="font-size:8px;color:#9ba0aa;text-align:center;margin-bottom:2px;letter-spacing:.3px;">HORIZONTAL</div>
+                  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
+                    <div class="at-thumb at-slot-cell" data-slot="2"  title="East only — left end cap"></div>
+                    <div class="at-thumb at-slot-cell" data-slot="10" title="East + West — horizontal pipe"></div>
+                    <div class="at-thumb at-slot-cell" data-slot="8"  title="West only — right end cap"></div>
+                  </div>
+                </div>
+                <!-- Isolated / standalone -->
+                <div style="flex-shrink:0;text-align:center;">
+                  <div style="font-size:8px;color:#9ba0aa;margin-bottom:2px;letter-spacing:.3px;">ALONE</div>
+                  <div class="at-thumb at-slot-cell" data-slot="0" title="No neighbors — standalone tile" style="width:52px;height:52px;"></div>
+                </div>
+              </div>
+            </div>
+
+            <div style="font-size:9px;color:#9ba0aa;margin-top:2px;margin-bottom:8px;text-align:center;">
+              Click any cell to upload · Drag image files onto cells
+            </div>
+
+            <!-- Bulk upload button (still useful for ordering 1–15) -->
             <button id="at-upload-many"
-              style="width:100%;background:#fff;border:2px solid #5fa8e0;color:#1d77c0;
-                     border-radius:6px;padding:14px;font-size:13px;font-weight:700;letter-spacing:.6px;
-                     cursor:pointer;margin-bottom:16px;">
-              ⬆ UPLOAD IMAGES
+              style="width:100%;background:#fff;border:1px solid #5fa8e0;color:#1d77c0;
+                     border-radius:5px;padding:8px;font-size:11px;font-weight:600;letter-spacing:.5px;
+                     cursor:pointer;margin-bottom:8px;">
+              ⬆ BULK UPLOAD (order: slot 0 → 15)
             </button>
-
-            <!-- Tile thumbnails grid -->
-            <div id="at-tiles-grid"
-                 style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:6px;">
-            </div>
-
-            <div style="font-size:10px;color:#9ba0aa;margin-top:4px;text-align:center;">
-              Click any thumbnail to upload a single tile.
-            </div>
 
           </div>
 
@@ -378,10 +422,14 @@ export function openAutoTileEditor(obj) {
     <style>
       .at-thumb { aspect-ratio:1;background:#e6eaf0;border:1px dashed #c0c5d0;border-radius:4px;
                   cursor:pointer;display:flex;align-items:center;justify-content:center;overflow:hidden;
-                  position:relative; }
-      .at-thumb:hover { border-color:#5fa8e0;background:#f0f4fa; }
+                  position:relative;min-width:0; }
+      .at-thumb:hover { border-color:#5fa8e0;background:#ddeeff; }
+      .at-thumb.at-drag-over { border-color:#4ade80;background:#d0f4e0;border-style:solid; }
+      .at-thumb.at-has-img { border-style:solid;border-color:#8ac4f0; }
       .at-thumb img { width:100%;height:100%;object-fit:contain; }
-      .at-thumb .at-mask-num { position:absolute;top:1px;left:3px;font-size:8px;color:#7a7e88;font-family:monospace; }
+      .at-thumb .at-slot-lbl { position:absolute;bottom:1px;right:3px;font-size:7px;color:#9ba0aa;
+                                font-family:monospace;line-height:1;pointer-events:none; }
+      .at-thumb .at-empty-dot { color:#c8cdd8;font-size:16px;line-height:1;pointer-events:none; }
       .at-thumb.empty .at-empty { color:#bcc1cc;font-size:9px; }
       .at-mini { width:48px;background:#16161e;border:1px solid #3a3a48;color:#d8d8e8;
                  border-radius:3px;padding:3px 4px;font-size:10px;outline:none;text-align:right; }
@@ -508,26 +556,32 @@ function _wireEditor(panel, obj) {
         $('#at-brush-name').value = brush.name;
         $('#at-brush-type').value = brush.type || '16-tile';
 
-        // Build tile thumbnails grid (16 slots flowing 6 per row)
-        const grid = $('#at-tiles-grid');
-        grid.innerHTML = '';
-        for (let i = 0; i < SLOTS; i++) {
-            const cell = document.createElement('div');
-            cell.className = 'at-thumb' + (brush.tiles[i] ? '' : ' empty');
-            cell.dataset.slot = i;
-            const sharp = d.filterMode === 'pixelated' ? 'pixelated' : '';
-            cell.innerHTML = brush.tiles[i]
-                ? `<img class="${sharp}" src="${brush.tiles[i]}"/>`
-                : `<span class="at-empty">—</span>`;
-            const m = document.createElement('span');
-            m.className = 'at-mask-num';
-            m.textContent = i;
-            cell.appendChild(m);
-            cell.title = `Slot ${i}: N=${i&1?1:0} E=${i&2?1:0} S=${i&4?1:0} W=${i&8?1:0}`;
-            grid.appendChild(cell);
+        // Populate the new spatial slot cells (at-slot-cell divs by data-slot)
+        const sharp = d.filterMode === 'pixelated' ? 'pixelated' : '';
+        panel.querySelectorAll('.at-slot-cell').forEach(cell => {
+            const slotIdx = parseInt(cell.dataset.slot, 10);
+            const hasImg  = !!brush.tiles[slotIdx];
+            // Clear
+            cell.innerHTML = '';
+            cell.className = 'at-thumb at-slot-cell' + (hasImg ? ' at-has-img' : '');
+            if (hasImg) {
+                const img = document.createElement('img');
+                img.src = brush.tiles[slotIdx];
+                if (sharp) img.className = sharp;
+                cell.appendChild(img);
+            } else {
+                const dot = document.createElement('span');
+                dot.className = 'at-empty-dot';
+                dot.textContent = '+';
+                cell.appendChild(dot);
+            }
+            // Slot number label (bottom-right)
+            const lbl = document.createElement('span');
+            lbl.className = 'at-slot-lbl';
+            lbl.textContent = slotIdx;
+            cell.appendChild(lbl);
+        });
 
-            cell.addEventListener('click', () => _uploadOne(brush, i));
-        }
         _brushImgs(brush);
         _drawPreview();
     }
@@ -537,6 +591,54 @@ function _wireEditor(panel, obj) {
         b.name = e.target.value || b.name;
         _populateBrushes();
     });
+
+    // Wire click + drag-drop onto all at-slot-cell divs
+    function _wireSlotCells() {
+        panel.querySelectorAll('.at-slot-cell').forEach(cell => {
+            const slotIdx = parseInt(cell.dataset.slot, 10);
+
+            cell.addEventListener('click', () => {
+                const brush = _getBrush(); if (!brush) return;
+                _uploadOne(brush, slotIdx);
+            });
+
+            // Drag and drop support
+            cell.addEventListener('dragover', e => {
+                e.preventDefault();
+                cell.classList.add('at-drag-over');
+            });
+            cell.addEventListener('dragleave', () => {
+                cell.classList.remove('at-drag-over');
+            });
+            cell.addEventListener('drop', e => {
+                e.preventDefault();
+                cell.classList.remove('at-drag-over');
+                const brush = _getBrush(); if (!brush) return;
+                const file = e.dataTransfer?.files?.[0];
+                if (!file || !file.type.startsWith('image/')) return;
+                const fr = new FileReader();
+                fr.onload = ev => {
+                    brush.tiles[slotIdx] = ev.target.result;
+                    imgCache.delete(brush.id);
+                    _renderBrushForm();
+                    _drawMap();
+                };
+                fr.readAsDataURL(file);
+            });
+
+            // Right-click to clear
+            cell.addEventListener('contextmenu', e => {
+                e.preventDefault();
+                const brush = _getBrush(); if (!brush) return;
+                if (!brush.tiles[slotIdx]) return;
+                brush.tiles[slotIdx] = null;
+                imgCache.delete(brush.id);
+                _renderBrushForm();
+                _drawMap();
+            });
+        });
+    }
+    _wireSlotCells();
 
     function _uploadOne(brush, slotIdx) {
         const inp = document.createElement('input');
@@ -555,7 +657,7 @@ function _wireEditor(panel, obj) {
         inp.click();
     }
 
-    // ── UPLOAD IMAGES (multi) ───────────────────────────────
+    // ── UPLOAD IMAGES (multi, bulk order slot 0→15) ─────────
     $('#at-upload-many').addEventListener('click', () => {
         const brush = _getBrush(); if (!brush) return;
         const inp = document.createElement('input');
