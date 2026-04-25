@@ -205,342 +205,232 @@ export function openAutoTileEditor(obj) {
     const panel = document.createElement('div');
     panel.id = 'at-editor';
     panel.style.cssText = `
-        position:fixed;inset:0;z-index:15000;
-        font-family:'Inter','Segoe UI',sans-serif;font-size:11px;
-        display:flex;flex-direction:column;
+        position:fixed;inset:0;z-index:15000;background:rgba(0,0,0,0.92);
+        display:flex;font-family:'Inter','Segoe UI',sans-serif;font-size:11px;color:#d8d8e8;
     `;
 
-
-    // ── Inject Tailwind + Lucide if not already present ─────────
-    if (!document.getElementById('at-tailwind')) {
-        const tw = document.createElement('script');
-        tw.id = 'at-tailwind';
-        tw.src = 'https://cdn.tailwindcss.com';
-        document.head.appendChild(tw);
-    }
-    if (!document.getElementById('at-lucide')) {
-        const lc = document.createElement('script');
-        lc.id = 'at-lucide';
-        lc.src = 'https://unpkg.com/lucide@latest';
-        document.head.appendChild(lc);
-    }
-
-    // ── Inject scoped styles ─────────────────────────────────────
-    if (!document.getElementById('at-editor-styles')) {
-        const style = document.createElement('style');
-        style.id = 'at-editor-styles';
-        style.textContent = `
-            #at-editor { background: #e8ecf1; }
-            #at-editor .at-tile-block {
-                border-top: 1px solid #9ca3af;
-                border-left: 1px solid #9ca3af;
-            }
-            #at-editor .at-drop-target {
-                border-bottom: 1px solid #9ca3af;
-                border-right: 1px solid #9ca3af;
-                background-color: #dce3ef;
-                position: relative;
-                box-sizing: border-box;
-                overflow: hidden;
-                touch-action: none;
-            }
-            #at-editor .at-mode-drag .at-drop-target.has-image { cursor: grab; }
-            #at-editor .at-mode-drag .at-drop-target.has-image:active { cursor: grabbing; }
-            #at-editor .at-mode-drag .at-drop-target.has-image:hover {
-                box-shadow: inset 0 0 0 3px #3b82f6;
-                filter: brightness(1.05);
-            }
-            #at-editor .at-mode-drag .at-drop-target.drag-over {
-                filter: brightness(0.9);
-                background-color: #bfdbfe;
-                box-shadow: inset 0 0 0 3px #2563eb;
-            }
-            #at-editor .at-mode-drag .at-drop-target.has-image:hover .at-clear-btn { display: flex; }
-            #at-editor .at-mode-erase .at-drop-target.has-image { cursor: crosshair; }
-            #at-editor .at-mode-erase .at-drop-target.has-image:hover {
-                box-shadow: inset 0 0 0 3px #ef4444;
-            }
-            #at-editor .at-mode-erase .at-clear-btn { display: none !important; }
-            #at-editor #at-grid-container.guides-off .at-tile-block,
-            #at-editor #at-grid-container.guides-off .at-drop-target {
-                border-color: transparent;
-            }
-            #at-editor .at-clear-btn {
-                display: none;
-                position: absolute;
-                top: 0; right: 0;
-                background-color: #ef4444;
-                color: white;
-                padding: 4px;
-                border-bottom-left-radius: 6px;
-                z-index: 10;
-                transition: background-color 0.1s;
-                cursor: pointer;
-                align-items: center;
-                justify-content: center;
-            }
-            #at-editor .at-clear-btn:hover { background-color: #dc2626; }
-            #at-editor #at-draw-canvas {
-                cursor: none;
-                image-rendering: pixelated;
-                box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1),0 2px 4px -1px rgba(0,0,0,0.06);
-                touch-action: none;
-            }
-            @keyframes at-popIn {
-                0%   { transform: scale(0.8); opacity: 0; }
-                100% { transform: scale(1);   opacity: 1; }
-            }
-            #at-editor .at-animate-pop {
-                animation: at-popIn 0.3s cubic-bezier(0.175,0.885,0.32,1.275) forwards;
-            }
-        `;
-        document.head.appendChild(style);
-    }
-
-    // ── Panel HTML (VIEW 1: Editor, VIEW 2: Draw) ────────────────
     panel.innerHTML = `
-    <!-- CLOSE BUTTON (floating) -->
-    <div style="position:absolute;top:12px;right:16px;z-index:100;">
-      <button id="at-close"
-        style="background:#fff;border:1px solid #d1d5db;color:#374151;border-radius:6px;
-               padding:6px 14px;font-size:13px;font-weight:700;cursor:pointer;
-               box-shadow:0 1px 4px rgba(0,0,0,.12);">✕ Close</button>
-    </div>
+    <div style="display:flex;width:100%;height:100%;">
 
-    <!-- ===== VIEW 1: EDITOR MODE ===== -->
-    <div id="at-editor-view" style="display:flex;width:100%;height:100%;">
-
-      <!-- Left Panel: Brush Controls & Gallery -->
-      <div style="width:320px;background:white;border-right:1px solid #e5e7eb;
-                  box-shadow:1px 0 4px rgba(0,0,0,.05);display:flex;flex-direction:column;
-                  height:100%;z-index:10;flex-shrink:0;">
-        <div style="padding:24px 24px 16px;">
-
-          <!-- Brush Selector -->
-          <div style="margin-bottom:20px;">
-            <label style="display:block;font-size:10px;font-weight:600;color:#9ca3af;
-                           text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">
-              Active Brush
-            </label>
-            <div style="display:flex;gap:6px;align-items:center;">
-              <select id="at-brush-select"
-                style="flex:1;border:none;border-bottom:1px solid #9ca3af;padding:4px 0;
-                       outline:none;color:#374151;background:transparent;font-size:13px;">
-                <option value="">— Select brush —</option>
-              </select>
-              <button id="at-brush-new"
-                style="background:#fff;border:1px solid #4ade80;color:#16a34a;border-radius:4px;
-                       padding:4px 8px;font-size:12px;cursor:pointer;font-weight:700;">+</button>
-              <button id="at-brush-delete"
-                style="background:#fff;border:1px solid #fca5a5;color:#b91c1c;border-radius:4px;
-                       padding:4px 6px;font-size:12px;cursor:pointer;">🗑</button>
-            </div>
-          </div>
-
-          <!-- Brush Name (shown when brush selected) -->
-          <div id="at-brush-name-row" style="margin-bottom:20px;display:none;">
-            <label style="display:block;font-size:10px;font-weight:600;color:#9ca3af;
-                           text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">
-              Brush Name
-            </label>
-            <input id="at-brush-name" type="text"
-              style="width:100%;border:none;border-bottom:1px solid #9ca3af;padding:4px 0;
-                     outline:none;color:#374151;background:transparent;font-size:14px;">
-          </div>
-
-          <!-- Upload Individual Pieces -->
-          <button id="at-upload-many"
-            style="width:100%;padding:8px 0;border:2px solid #3b82f6;color:#3b82f6;font-weight:700;
-                   border-radius:6px;background:white;cursor:pointer;font-size:12px;
-                   letter-spacing:.05em;text-transform:uppercase;margin-bottom:10px;">
-            ⬆ Upload Images
-          </button>
-          <input type="file" id="at-pieces-file-input" multiple accept="image/*" style="display:none;">
+      <!-- LEFT: Brush trainer (matches the reference UI) -->
+      <div style="width:380px;flex-shrink:0;background:#f4f6fa;color:#222;
+                  border-right:1px solid #2e2e3a;display:flex;flex-direction:column;overflow:hidden;">
+        <!-- Header -->
+        <div style="padding:12px 16px;display:flex;align-items:center;gap:8px;flex-shrink:0;
+                    border-bottom:1px solid #e0e3e9;">
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:#4ade80;stroke-width:2;">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>
+            <line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>
+          </svg>
+          <span style="font-weight:700;color:#222;">Auto Tile Brush Trainer</span>
+          <div style="flex:1;"></div>
+          <button id="at-close" style="background:none;border:none;color:#888;cursor:pointer;font-size:18px;padding:2px 6px;">✕</button>
         </div>
 
-        <!-- Gallery -->
-        <div style="flex:1;overflow-y:auto;padding:0 24px 24px;">
-          <div id="at-gallery"
-               style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;"></div>
-          <div id="at-empty-gallery-msg"
-               style="text-align:center;font-size:13px;color:#9ca3af;margin-top:40px;">
-            No images yet.<br>Upload pieces or a full brush.
-          </div>
-        </div>
-      </div>
+        <div style="padding:14px 18px;overflow:auto;flex:1;">
 
-      <!-- Right Panel: Grid + Actions -->
-      <div style="flex:1;overflow-y:auto;padding:40px;display:flex;flex-direction:column;
-                  align-items:center;justify-content:center;position:relative;">
-        <div style="background:white;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.08);
-                    padding:32px;width:100%;max-width:520px;">
-
-          <!-- Header & Guide toggle -->
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-            <h2 style="font-size:18px;font-weight:700;color:#374151;margin:0;">Tile Editor</h2>
-            <button id="at-guide-toggle"
-              style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;
-                     background:none;border:none;cursor:pointer;">
-              👁 <span id="at-guides-label">Guides OFF</span>
-            </button>
+          <!-- Brush selector -->
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:14px;">
+            <select id="at-brush-select" style="flex:1;background:#fff;border:1px solid #cfd4dd;
+                    color:#222;border-radius:4px;padding:7px;font-size:12px;outline:none;">
+              <option value="">— Select brush —</option>
+            </select>
+            <button id="at-brush-new" title="New brush"
+              style="background:#fff;border:1px solid #4ade80;color:#16a34a;
+                     border-radius:4px;padding:6px 10px;font-size:12px;cursor:pointer;font-weight:600;">+ New</button>
+            <button id="at-brush-delete" title="Delete brush"
+              style="background:#fff;border:1px solid #e0a0a0;color:#b04040;
+                     border-radius:4px;padding:6px 8px;font-size:12px;cursor:pointer;">🗑</button>
           </div>
 
-          <!-- Toolbar -->
-          <div style="display:flex;background:#f3f4f6;padding:4px;border-radius:8px;
-                      margin-bottom:24px;width:max-content;box-shadow:inset 0 1px 3px rgba(0,0,0,.1);">
-            <button id="at-tool-drag"
-              style="display:flex;align-items:center;gap:6px;padding:6px 16px;border-radius:6px;
-                     background:white;box-shadow:0 1px 3px rgba(0,0,0,.1);font-size:12px;
-                     font-weight:700;color:#2563eb;border:none;cursor:pointer;">
-              ✥ Drag &amp; Drop
-            </button>
-            <button id="at-tool-erase"
-              style="display:flex;align-items:center;gap:6px;padding:6px 16px;border-radius:6px;
-                     background:none;border:none;font-size:12px;font-weight:700;
-                     color:#6b7280;cursor:pointer;">
-              ⌫ Eraser Brush
-            </button>
-          </div>
+          <div id="at-brush-form" style="display:none;">
 
-          <!-- 4×4 Tile Grid -->
-          <div id="at-grid-container"
-               style="display:flex;flex-direction:column;gap:10px;width:max-content;margin:0 auto;"
-               class="at-mode-drag">
-            <!-- Top Row: 3×3 + 1×3 -->
-            <div style="display:flex;gap:10px;">
-              <div style="display:grid;grid-template-columns:repeat(3,1fr);" class="at-tile-block">
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="0"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="1"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="2"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="3"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="4"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="5"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="6"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="7"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="8"></div>
-              </div>
-              <div style="display:grid;grid-template-columns:1fr;" class="at-tile-block">
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="9"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="10"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="11"></div>
-              </div>
+            <!-- Brush Name -->
+            <div style="margin-bottom:12px;">
+              <label style="display:block;font-size:10px;color:#7a7e88;margin-bottom:4px;letter-spacing:.4px;">
+                Brush Name
+              </label>
+              <input id="at-brush-name" type="text"
+                     style="width:100%;background:transparent;border:none;border-bottom:1px solid #cfd4dd;
+                            color:#222;padding:6px 0;font-size:14px;font-weight:600;outline:none;">
             </div>
-            <!-- Bottom Row: 3×1 + 1×1 -->
-            <div style="display:flex;gap:10px;">
-              <div style="display:grid;grid-template-columns:repeat(3,1fr);" class="at-tile-block">
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="12"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="13"></div>
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="14"></div>
-              </div>
-              <div style="display:grid;grid-template-columns:1fr;" class="at-tile-block">
-                <div class="at-drop-target" style="width:60px;height:60px;" data-slot="15"></div>
-              </div>
-            </div>
-          </div>
 
-          <!-- Map settings + action buttons -->
-          <div style="margin-top:32px;display:flex;flex-direction:column;gap:12px;">
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;color:#6b7280;">
-              <span>Cols</span>
-              <input id="at-cols" type="number" min="1" max="512"
-                style="width:48px;background:#f9fafb;border:1px solid #d1d5db;color:#374151;
-                       border-radius:4px;padding:4px;font-size:11px;outline:none;text-align:right;">
-              <span>Rows</span>
-              <input id="at-rows" type="number" min="1" max="512"
-                style="width:48px;background:#f9fafb;border:1px solid #d1d5db;color:#374151;
-                       border-radius:4px;padding:4px;font-size:11px;outline:none;text-align:right;">
-              <span>TW</span>
-              <input id="at-tw" type="number" min="4" max="512"
-                style="width:48px;background:#f9fafb;border:1px solid #d1d5db;color:#374151;
-                       border-radius:4px;padding:4px;font-size:11px;outline:none;text-align:right;">
-              <span>TH</span>
-              <input id="at-th" type="number" min="4" max="512"
-                style="width:48px;background:#f9fafb;border:1px solid #d1d5db;color:#374151;
-                       border-radius:4px;padding:4px;font-size:11px;outline:none;text-align:right;">
-              <select id="at-filter"
-                style="background:#f9fafb;border:1px solid #d1d5db;color:#374151;
-                       border-radius:4px;padding:4px 6px;font-size:11px;outline:none;">
-                <option value="smooth">Smooth</option>
-                <option value="pixelated">Pixelated</option>
+            <!-- Tileset Type -->
+            <div style="margin-bottom:18px;">
+              <label style="display:block;font-size:10px;color:#7a7e88;margin-bottom:4px;letter-spacing:.4px;">
+                Tileset Type
+              </label>
+              <select id="at-brush-type"
+                      style="width:100%;background:transparent;border:none;border-bottom:1px solid #cfd4dd;
+                             color:#222;padding:6px 0;font-size:14px;outline:none;">
+                <option value="16-tile" selected>16 Tiles</option>
               </select>
             </div>
-            <button id="at-go-to-draw-btn"
-              style="width:100%;padding:12px 0;background:#10b981;color:white;font-weight:700;
-                     border-radius:6px;border:none;cursor:pointer;font-size:13px;
-                     letter-spacing:.05em;text-transform:uppercase;box-shadow:0 4px 6px rgba(0,0,0,.1);">
-              🗺 Done / Draw Map
+
+            <!-- Upload Images big button -->
+            <button id="at-upload-many"
+              style="width:100%;background:#fff;border:2px solid #5fa8e0;color:#1d77c0;
+                     border-radius:6px;padding:14px;font-size:13px;font-weight:700;letter-spacing:.6px;
+                     cursor:pointer;margin-bottom:16px;">
+              ⬆ UPLOAD IMAGES
             </button>
-            <button id="at-upload-sheet"
-              style="width:100%;padding:8px 0;border:2px solid #3b82f6;color:#3b82f6;font-weight:700;
-                     border-radius:6px;background:white;cursor:pointer;font-size:12px;
-                     letter-spacing:.05em;text-transform:uppercase;">
-              ⬆ Advanced Auto-Complete (4×4 Brush)
+
+            <!-- Tile thumbnails grid -->
+            <div id="at-tiles-grid"
+                 style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:6px;">
+            </div>
+
+            <div style="font-size:10px;color:#9ba0aa;margin-top:4px;text-align:center;">
+              Click any thumbnail to upload a single tile.
+            </div>
+
+          </div>
+
+          <div id="at-brush-empty" style="text-align:center;color:#9ba0aa;padding:24px 0;font-size:12px;">
+            No brush selected.<br>Click <b>+ New</b> to create one.
+          </div>
+        </div>
+      </div>
+
+      <!-- MIDDLE: Brush Auto Tiler preview pane -->
+      <div style="width:340px;flex-shrink:0;background:#f4f6fa;color:#222;
+                  border-right:1px solid #2e2e3a;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="padding:14px 16px;background:#fff;margin:14px;border-radius:8px;
+                    box-shadow:0 1px 4px rgba(0,0,0,.05);flex:1;overflow:auto;">
+          <div style="display:flex;align-items:center;margin-bottom:10px;">
+            <span style="font-weight:700;color:#222;">Brush Auto Tiler</span>
+            <div style="flex:1;"></div>
+            <button id="at-toggle-guides" style="background:none;border:none;color:#888;font-size:11px;cursor:pointer;
+                                                 display:flex;align-items:center;gap:4px;">
+              <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+              <span id="at-guides-label">Tile guides OFF</span>
             </button>
-            <input type="file" id="at-brush-file-input" accept="image/*" style="display:none;">
+          </div>
+
+          <canvas id="at-preview"
+                  style="display:block;width:100%;background:#cfd4dd;border-radius:4px;"></canvas>
+
+          <button id="at-download-preview"
+                  style="width:100%;margin-top:14px;background:#fff;border:1px solid #cfd4dd;color:#222;
+                         border-radius:6px;padding:10px;font-size:11px;font-weight:600;letter-spacing:.6px;
+                         cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
+            ⬇  DOWNLOAD PREVIEW
+          </button>
+          <button id="at-upload-sheet"
+                  style="width:100%;margin-top:8px;background:#fff;border:2px solid #5fa8e0;color:#1d77c0;
+                         border-radius:6px;padding:10px;font-size:11px;font-weight:700;letter-spacing:.6px;
+                         cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
+            ⬆  UPLOAD BRUSH IMAGE
+          </button>
+        </div>
+      </div>
+
+      <!-- RIGHT: Map painter -->
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#0e0e18;">
+        <div style="padding:8px 14px;border-bottom:1px solid #1e1e2e;font-size:10px;color:#9ba0aa;
+                    flex-shrink:0;display:flex;align-items:center;gap:10px;">
+          <span style="font-weight:700;color:#4ade80;letter-spacing:.6px;">PAINT MAP</span>
+          <span style="color:#3a3a48;">|</span>
+          <span id="at-cursor-info" style="color:#7a7a90;">Hover over map to paint</span>
+
+          <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+            <span style="color:#7a7a90;">Render</span>
+            <select id="at-filter" style="background:#16161e;border:1px solid #3a3a48;color:#d8d8e8;
+                    border-radius:3px;padding:3px 6px;font-size:10px;outline:none;">
+              <option value="smooth">Smooth (curves)</option>
+              <option value="pixelated">Pixelated</option>
+            </select>
+            <span style="color:#7a7a90;">Cols</span>
+            <input id="at-cols" type="number" class="at-mini" min="1" max="512">
+            <span style="color:#7a7a90;">Rows</span>
+            <input id="at-rows" type="number" class="at-mini" min="1" max="512">
+            <span style="color:#7a7a90;">Tile</span>
+            <input id="at-tw" type="number" class="at-mini" min="4" max="512">
+            <span style="color:#7a7a90;">×</span>
+            <input id="at-th" type="number" class="at-mini" min="4" max="512">
+            <button id="at-apply" style="background:#1e3050;border:1px solid #3A72A5;color:#7aabcc;
+                    border-radius:3px;padding:3px 10px;font-size:10px;cursor:pointer;">Apply</button>
+
+            <span style="color:#3a3a48;margin:0 4px;">|</span>
+            <button class="at-tool tool-active" data-tool="paint" title="Paint (B)">🖌</button>
+            <button class="at-tool" data-tool="erase" title="Erase (E)">⌫</button>
+            <button class="at-tool" data-tool="fill"  title="Fill (F)">🪣</button>
+            <button class="at-tool" data-tool="pick"  title="Pick (I)">🎯</button>
           </div>
         </div>
 
-        <div style="position:absolute;bottom:24px;font-size:12px;color:#9ca3af;">
-          ℹ️ Use the Eraser Brush to manually trim pixels inside a tile box!
+        <div style="flex:1;overflow:auto;padding:20px;display:flex;align-items:flex-start;justify-content:flex-start;">
+          <div style="position:relative;display:inline-block;flex-shrink:0;">
+            <canvas id="at-map" style="display:block;cursor:crosshair;"></canvas>
+            <canvas id="at-map-ov" style="position:absolute;inset:0;pointer-events:none;"></canvas>
+          </div>
+        </div>
+
+        <div style="padding:6px 14px;border-top:1px solid #1e1e2e;font-size:10px;color:#3a3a48;text-align:right;flex-shrink:0;">
+          B=Paint  E=Erase  F=Fill  I=Pick  Ctrl+Z=Undo
         </div>
       </div>
     </div>
 
-    <!-- ===== VIEW 2: DRAWING MODE ===== -->
-    <div id="at-draw-view"
-         style="display:none;flex-direction:column;width:100%;height:100%;background:#1e293b;">
-      <div style="background:white;border-bottom:1px solid #e5e7eb;padding:16px;
-                  display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
-        <div style="display:flex;align-items:center;gap:16px;">
-          <button id="at-back-to-editor-btn"
-            style="padding:8px 16px;background:#f3f4f6;color:#374151;font-weight:600;
-                   border-radius:6px;border:none;cursor:pointer;font-size:13px;">
-            ← Edit Brush
-          </button>
-          <span style="font-size:18px;font-weight:700;color:#1f2937;">🖊 Map Drawer</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:16px;font-size:12px;color:#6b7280;font-weight:500;">
-          <span>🔵 Left Click: Draw</span>
-          <span>🔴 Right Click: Erase</span>
-          <button id="at-clear-map-btn"
-            style="margin-left:16px;padding:4px 12px;border:1px solid #fca5a5;color:#ef4444;
-                   background:white;border-radius:4px;cursor:pointer;font-size:12px;">Clear Map</button>
-        </div>
-      </div>
-      <div style="flex:1;overflow:auto;padding:32px;display:flex;justify-content:center;align-items:center;">
-        <div style="position:relative;background:white;box-shadow:0 25px 50px rgba(0,0,0,.25);
-                    border-radius:4px;overflow:hidden;">
-          <canvas id="at-draw-canvas" oncontextmenu="return false;"></canvas>
-        </div>
-      </div>
-    </div>
+    <style>
+      .at-thumb { aspect-ratio:1;background:#e6eaf0;border:1px dashed #c0c5d0;border-radius:4px;
+                  cursor:pointer;display:flex;align-items:center;justify-content:center;overflow:hidden;
+                  position:relative; }
+      .at-thumb:hover { border-color:#5fa8e0;background:#f0f4fa; }
+      .at-thumb img { width:100%;height:100%;object-fit:contain; }
+      .at-thumb .at-mask-num { position:absolute;top:1px;left:3px;font-size:8px;color:#7a7e88;font-family:monospace; }
+      .at-thumb.empty .at-empty { color:#bcc1cc;font-size:9px; }
+      .at-mini { width:48px;background:#16161e;border:1px solid #3a3a48;color:#d8d8e8;
+                 border-radius:3px;padding:3px 4px;font-size:10px;outline:none;text-align:right; }
+      .at-tool { background:#16161e;border:1px solid #2e2e3a;color:#9ba0aa;border-radius:3px;
+                 width:28px;height:24px;font-size:13px;cursor:pointer;line-height:1; }
+      .at-tool:hover { border-color:#4ade80;color:#4ade80; }
+      .at-tool.tool-active { border-color:#4ade80;background:#16321e;color:#4ade80; }
+      .pixelated { image-rendering:pixelated; }
+    </style>
     `;
-
     document.body.appendChild(panel);
-    _wireNewEditor(panel, obj);
+    _wireEditor(panel, obj);
 }
 
-// ── New editor wiring (HTML-reference implementation) ────────
-function _wireNewEditor(panel, obj) {
+function _wireEditor(panel, obj) {
     const d = obj.autoTileData;
-    const $  = sel => panel.querySelector(sel);
-    const $$ = sel => Array.from(panel.querySelectorAll(sel));
-
-    // Populate map settings from obj
-    $('#at-cols').value   = d.cols;
-    $('#at-rows').value   = d.rows;
-    $('#at-tw').value     = d.tileW;
-    $('#at-th').value     = d.tileH;
-    $('#at-filter').value = d.filterMode || 'smooth';
-
-    // ── Brush management ─────────────────────────────────────────
-    const brushSel = $('#at-brush-select');
     let activeBrushId = state.tilesetBrushes[0]?.id || null;
+    let tool = 'paint';
+    let isPainting = false;
+    let guidesOn = false;
+    const undoStack = [];
+    const imgCache = new Map(); // brushId -> Array<HTMLImageElement|null>
 
-    function _getBrush() {
-        return state.tilesetBrushes.find(b => b.id === activeBrushId) || null;
-    }
+    // ── References ───────────────────────────────────────────
+    const $ = sel => panel.querySelector(sel);
+    const map   = $('#at-map'),  mov  = $('#at-map-ov');
+    const mctx  = map.getContext('2d');
+    const moctx = mov.getContext('2d');
+    const preview = $('#at-preview');
+    const pctx = preview.getContext('2d');
 
+    // Init render-mode/cols/rows fields
+    $('#at-filter').value = d.filterMode;
+    $('#at-cols').value = d.cols;
+    $('#at-rows').value = d.rows;
+    $('#at-tw').value   = d.tileW;
+    $('#at-th').value   = d.tileH;
+
+    // ── Close ────────────────────────────────────────────────
+    $('#at-close').addEventListener('click', () => {
+        rebuildAutoTileSprites(obj);
+        _buildHelper(obj);
+        import('./engine.ui.js').then(m => { m.syncPixiToInspector(); m.refreshHierarchy(); });
+        panel.remove();
+        window.removeEventListener('keydown', _onKey);
+    });
+
+    // ── Brush selector ───────────────────────────────────────
+    const brushSel = $('#at-brush-select');
     function _populateBrushes() {
         brushSel.innerHTML = '<option value="">— Select brush —</option>';
         for (const b of state.tilesetBrushes) {
@@ -549,25 +439,11 @@ function _wireNewEditor(panel, obj) {
             if (b.id === activeBrushId) o.selected = true;
             brushSel.appendChild(o);
         }
-        _updateBrushNameRow();
+        _renderBrushForm();
     }
-
-    function _updateBrushNameRow() {
-        const brush = _getBrush();
-        $('#at-brush-name-row').style.display = brush ? 'block' : 'none';
-        if (brush) $('#at-brush-name').value = brush.name;
-    }
-
     brushSel.addEventListener('change', () => {
         activeBrushId = brushSel.value || null;
-        _updateBrushNameRow();
-        _loadBrushIntoGrid();
-    });
-
-    $('#at-brush-name').addEventListener('change', e => {
-        const b = _getBrush(); if (!b) return;
-        b.name = e.target.value || b.name;
-        _populateBrushes();
+        _renderBrushForm();
     });
 
     $('#at-brush-new').addEventListener('click', () => {
@@ -581,12 +457,11 @@ function _wireNewEditor(panel, obj) {
         });
         activeBrushId = id;
         _populateBrushes();
-        _loadBrushIntoGrid();
     });
 
     $('#at-brush-delete').addEventListener('click', () => {
         const brush = _getBrush(); if (!brush) return;
-        if (!confirm(`Delete brush "${brush.name}"?`)) return;
+        if (!confirm(`Delete brush "${brush.name}"? This will erase its cells from this map.`)) return;
         const idx = d.brushList.indexOf(brush.id);
         if (idx >= 0) {
             for (let i = 0; i < d.cells.length; i++) {
@@ -598,478 +473,397 @@ function _wireNewEditor(panel, obj) {
         state.tilesetBrushes = state.tilesetBrushes.filter(b => b.id !== brush.id);
         activeBrushId = state.tilesetBrushes[0]?.id || null;
         _populateBrushes();
-        _loadBrushIntoGrid();
+        _drawMap();
     });
 
-    _populateBrushes();
-
-    // ── Gallery ──────────────────────────────────────────────────
-    const gallery  = $('#at-gallery');
-    const emptyMsg = $('#at-empty-gallery-msg');
-    let draggedImageSrc = null;
-
-    function addImageToGallery(imgSrc) {
-        emptyMsg.style.display = 'none';
-        const wrap = document.createElement('div');
-        wrap.style.cssText = `width:100%;aspect-ratio:1;background:#dce3ef;border:1px solid #d1d5db;
-            border-radius:4px;overflow:hidden;cursor:grab;`;
-        wrap.draggable = true;
-        const img = document.createElement('img');
-        img.src = imgSrc;
-        img.style.cssText = 'width:100%;height:100%;object-fit:cover;pointer-events:none;';
-        wrap.appendChild(img);
-        gallery.appendChild(wrap);
-        wrap.addEventListener('dragstart', e => {
-            draggedImageSrc = imgSrc;
-            e.dataTransfer.setData('text/plain', imgSrc);
-            e.dataTransfer.effectAllowed = 'copy';
-            setTimeout(() => wrap.style.opacity = '0.5', 0);
-        });
-        wrap.addEventListener('dragend', () => { wrap.style.opacity = ''; draggedImageSrc = null; });
+    function _getBrush() {
+        return state.tilesetBrushes.find(b => b.id === activeBrushId) || null;
     }
 
-    $('#at-upload-many').addEventListener('click', () => $('#at-pieces-file-input').click());
-    $('#at-pieces-file-input').addEventListener('change', e => {
-        Array.from(e.target.files).forEach(file => {
-            if (!file.type.startsWith('image/')) return;
-            const r = new FileReader();
-            r.onload = ev => addImageToGallery(ev.target.result);
-            r.readAsDataURL(file);
-        });
-        e.target.value = '';
-    });
-
-    // ── Slot fill / clear ────────────────────────────────────────
-    function fillSlot(target, imgSrc) {
-        target.innerHTML = '';
-        const clearBtn = document.createElement('div');
-        clearBtn.className = 'at-clear-btn';
-        clearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14"
-            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-            stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>`;
-        clearBtn.addEventListener('click', e2 => {
-            e2.stopPropagation();
-            if (currentEditorMode === 'drag') clearSlot(target);
-        });
-        target.appendChild(clearBtn);
-
-        const img = new Image();
-        img.onload = () => {
-            const cv = document.createElement('canvas');
-            cv.width  = img.width; cv.height = img.height;
-            cv.style.cssText = 'width:100%;height:100%;pointer-events:none;border-radius:2px;';
-            cv.getContext('2d').drawImage(img, 0, 0);
-            target.insertBefore(cv, clearBtn);
-            const dataUrl = cv.toDataURL('image/png');
-            target.dataset.imgSrc = dataUrl;
-            target.classList.add('has-image');
-            const slotId = parseInt(target.dataset.slot);
-            const brush = _getBrush();
-            if (brush) brush.tiles[slotId] = dataUrl;
-        };
-        img.src = imgSrc;
-        target.style.backgroundImage = 'none';
-    }
-
-    function clearSlot(target) {
-        const slotId = parseInt(target.dataset.slot);
-        const brush = _getBrush();
-        if (brush) brush.tiles[slotId] = null;
-        target.innerHTML = '';
-        target.dataset.imgSrc = '';
-        target.classList.remove('has-image');
-    }
-
-    function _loadBrushIntoGrid() {
-        const brush = _getBrush();
-        $$('.at-drop-target').forEach(target => {
-            const slotId = parseInt(target.dataset.slot);
-            if (brush && brush.tiles[slotId]) {
-                fillSlot(target, brush.tiles[slotId]);
-            } else {
-                target.innerHTML = '';
-                target.dataset.imgSrc = '';
-                target.classList.remove('has-image');
+    // Pre-load images for a brush
+    function _brushImgs(brush) {
+        let imgs = imgCache.get(brush.id);
+        if (!imgs || imgs.length !== SLOTS) { imgs = new Array(SLOTS).fill(null); imgCache.set(brush.id, imgs); }
+        for (let i = 0; i < SLOTS; i++) {
+            const url = brush.tiles[i];
+            if (!url) { imgs[i] = null; continue; }
+            if (!imgs[i] || imgs[i].dataset.src !== url) {
+                const im = new Image();
+                im.dataset.src = url;
+                im.onload = () => { _drawMap(); _drawPreview(); };
+                im.src = url;
+                imgs[i] = im;
             }
-        });
-    }
-
-    _loadBrushIntoGrid();
-
-    // ── Eraser tool ──────────────────────────────────────────────
-    let isSlotErasing     = false;
-    let activeEraseCanvas = null;
-    let activeEraseCtx    = null;
-    let lastErasePos      = { x: 0, y: 0 };
-    let currentEditorMode = 'drag';
-
-    function _getEventPos(e) {
-        if (e.touches && e.touches.length > 0)
-            return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
-        return { clientX: e.clientX, clientY: e.clientY };
-    }
-
-    function _canvasLocalPos(cv, e) {
-        const rect = cv.getBoundingClientRect();
-        const pos  = _getEventPos(e);
-        return {
-            x: (pos.clientX - rect.left) * (cv.width  / rect.width),
-            y: (pos.clientY - rect.top)  * (cv.height / rect.height),
-        };
-    }
-
-    function _slotEraseStart(e, target) {
-        if (currentEditorMode !== 'erase') return;
-        const cv = target.querySelector('canvas');
-        if (!cv) return;
-        isSlotErasing     = true;
-        activeEraseCanvas = cv;
-        activeEraseCtx    = cv.getContext('2d');
-        activeEraseCtx.globalCompositeOperation = 'destination-out';
-        activeEraseCtx.lineWidth = cv.width / 5;
-        activeEraseCtx.lineCap   = 'round';
-        activeEraseCtx.lineJoin  = 'round';
-        lastErasePos = _canvasLocalPos(cv, e);
-        activeEraseCtx.beginPath();
-        activeEraseCtx.arc(lastErasePos.x, lastErasePos.y, activeEraseCtx.lineWidth / 2, 0, Math.PI * 2);
-        activeEraseCtx.fill();
-    }
-
-    function _slotEraseMove(e) {
-        if (!isSlotErasing || !activeEraseCanvas) return;
-        e.preventDefault();
-        const pos = _canvasLocalPos(activeEraseCanvas, e);
-        activeEraseCtx.beginPath();
-        activeEraseCtx.moveTo(lastErasePos.x, lastErasePos.y);
-        activeEraseCtx.lineTo(pos.x, pos.y);
-        activeEraseCtx.stroke();
-        lastErasePos = pos;
-    }
-
-    function _slotEraseEnd() {
-        if (!isSlotErasing || !activeEraseCanvas) return;
-        isSlotErasing = false;
-        const target = activeEraseCanvas.closest('.at-drop-target');
-        if (target) {
-            const dataUrl = activeEraseCanvas.toDataURL('image/png');
-            target.dataset.imgSrc = dataUrl;
-            const brush = _getBrush();
-            if (brush) brush.tiles[parseInt(target.dataset.slot)] = dataUrl;
         }
-        activeEraseCanvas = null;
-        activeEraseCtx    = null;
+        return imgs;
     }
 
-    window.addEventListener('mousemove',  _slotEraseMove);
-    window.addEventListener('touchmove',  _slotEraseMove, { passive: false });
-    window.addEventListener('mouseup',    _slotEraseEnd);
-    window.addEventListener('touchend',   _slotEraseEnd);
+    // ── Brush form (right column of left panel) ──────────────
+    function _renderBrushForm() {
+        const brush = _getBrush();
+        $('#at-brush-form').style.display  = brush ? 'block' : 'none';
+        $('#at-brush-empty').style.display = brush ? 'none'  : 'block';
+        if (!brush) { _drawPreview(); return; }
 
-    // Wire drop targets
-    const gridContainer = $('#at-grid-container');
-    $$('.at-drop-target').forEach(target => {
-        target.addEventListener('dragover', e => {
-            if (currentEditorMode !== 'drag') return;
-            e.preventDefault();
-            target.classList.add('drag-over');
-            e.dataTransfer.dropEffect = 'copy';
-        });
-        target.addEventListener('dragleave', () => target.classList.remove('drag-over'));
-        target.addEventListener('drop', e => {
-            if (currentEditorMode !== 'drag') return;
-            e.preventDefault();
-            target.classList.remove('drag-over');
-            const src = e.dataTransfer.getData('text/plain') || draggedImageSrc;
-            if (src) fillSlot(target, src);
-        });
-        target.addEventListener('mousedown', e => {
-            if (e.target.closest('.at-clear-btn')) return;
-            _slotEraseStart(e, target);
-        });
-        target.addEventListener('touchstart', e => {
-            if (e.target.closest('.at-clear-btn')) return;
-            _slotEraseStart(e, target);
-        });
+        $('#at-brush-name').value = brush.name;
+        $('#at-brush-type').value = brush.type || '16-tile';
+
+        // Build tile thumbnails grid (16 slots flowing 6 per row)
+        const grid = $('#at-tiles-grid');
+        grid.innerHTML = '';
+        for (let i = 0; i < SLOTS; i++) {
+            const cell = document.createElement('div');
+            cell.className = 'at-thumb' + (brush.tiles[i] ? '' : ' empty');
+            cell.dataset.slot = i;
+            const sharp = d.filterMode === 'pixelated' ? 'pixelated' : '';
+            cell.innerHTML = brush.tiles[i]
+                ? `<img class="${sharp}" src="${brush.tiles[i]}"/>`
+                : `<span class="at-empty">—</span>`;
+            const m = document.createElement('span');
+            m.className = 'at-mask-num';
+            m.textContent = i;
+            cell.appendChild(m);
+            cell.title = `Slot ${i}: N=${i&1?1:0} E=${i&2?1:0} S=${i&4?1:0} W=${i&8?1:0}`;
+            grid.appendChild(cell);
+
+            cell.addEventListener('click', () => _uploadOne(brush, i));
+        }
+        _brushImgs(brush);
+        _drawPreview();
+    }
+
+    $('#at-brush-name').addEventListener('change', e => {
+        const b = _getBrush(); if (!b) return;
+        b.name = e.target.value || b.name;
+        _populateBrushes();
     });
 
-    // ── Tool toggle ──────────────────────────────────────────────
-    function setEditorMode(mode) {
-        currentEditorMode = mode;
-        const dragBtn  = $('#at-tool-drag');
-        const eraseBtn = $('#at-tool-erase');
-        if (mode === 'drag') {
-            gridContainer.classList.remove('at-mode-erase');
-            gridContainer.classList.add('at-mode-drag');
-            dragBtn.style.background  = 'white';
-            dragBtn.style.color       = '#2563eb';
-            dragBtn.style.boxShadow   = '0 1px 3px rgba(0,0,0,.1)';
-            eraseBtn.style.background = 'none';
-            eraseBtn.style.color      = '#6b7280';
-            eraseBtn.style.boxShadow  = 'none';
-        } else {
-            gridContainer.classList.remove('at-mode-drag');
-            gridContainer.classList.add('at-mode-erase');
-            eraseBtn.style.background = 'white';
-            eraseBtn.style.color      = '#dc2626';
-            eraseBtn.style.boxShadow  = '0 1px 3px rgba(0,0,0,.1)';
-            dragBtn.style.background  = 'none';
-            dragBtn.style.color       = '#6b7280';
-            dragBtn.style.boxShadow   = 'none';
-        }
-    }
-    $('#at-tool-drag').addEventListener('click',  () => setEditorMode('drag'));
-    $('#at-tool-erase').addEventListener('click', () => setEditorMode('erase'));
-
-    // ── Guide toggle ─────────────────────────────────────────────
-    let guidesOff = false;
-    $('#at-guide-toggle').addEventListener('click', () => {
-        guidesOff = !guidesOff;
-        gridContainer.classList.toggle('guides-off', guidesOff);
-        $('#at-guides-label').textContent = guidesOff ? 'Guides ON' : 'Guides OFF';
-    });
-
-    // ── Advanced Auto-Complete (4×4 sheet) ───────────────────────
-    const sliceToSlotMapping = [0, 1, 2, 9, 3, 4, 5, 10, 6, 7, 8, 11, 12, 13, 14, 15];
-    $('#at-upload-sheet').addEventListener('click', () => $('#at-brush-file-input').click());
-    $('#at-brush-file-input').addEventListener('change', e => {
-        const file = e.target.files[0]; if (!file) return;
-        const fr = new FileReader();
-        fr.onload = ev => {
-            const img = new Image();
-            img.onload = () => {
-                if (!_getBrush()) {
-                    const id   = 'brush_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
-                    const name = 'Brush ' + (state.tilesetBrushes.length + 1);
-                    state.tilesetBrushes.push({
-                        id, name, type: '16-tile',
-                        tileW: Math.floor(img.width/4), tileH: Math.floor(img.height/4),
-                        tiles: new Array(SLOTS).fill(null),
-                    });
-                    activeBrushId = id;
-                    _populateBrushes();
-                }
-                const brush  = _getBrush();
-                const sliceW = Math.floor(img.width  / 4);
-                const sliceH = Math.floor(img.height / 4);
-                const offCv  = document.createElement('canvas');
-                offCv.width  = sliceW; offCv.height = sliceH;
-                const offCtx = offCv.getContext('2d');
-                const slices = [];
-                for (let y = 0; y < 4; y++)
-                    for (let x = 0; x < 4; x++) {
-                        offCtx.clearRect(0, 0, sliceW, sliceH);
-                        offCtx.drawImage(img, x*sliceW, y*sliceH, sliceW, sliceH, 0, 0, sliceW, sliceH);
-                        slices.push(offCv.toDataURL('image/png'));
-                    }
-                slices.forEach((url, idx) => {
-                    setTimeout(() => {
-                        addImageToGallery(url);
-                        const targetSlotId = sliceToSlotMapping[idx];
-                        const targetEl = panel.querySelector(`.at-drop-target[data-slot="${targetSlotId}"]`);
-                        if (targetEl) {
-                            fillSlot(targetEl, url);
-                            targetEl.classList.remove('at-animate-pop');
-                            void targetEl.offsetWidth;
-                            targetEl.classList.add('at-animate-pop');
-                        }
-                        if (brush) brush.tiles[targetSlotId] = url;
-                    }, idx * 40);
-                });
+    function _uploadOne(brush, slotIdx) {
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = 'image/*';
+        inp.onchange = e => {
+            const f = e.target.files[0]; if (!f) return;
+            const fr = new FileReader();
+            fr.onload = ev => {
+                brush.tiles[slotIdx] = ev.target.result;
+                imgCache.delete(brush.id);
+                _renderBrushForm();
+                _drawMap();
             };
-            img.src = ev.target.result;
+            fr.readAsDataURL(f);
         };
-        fr.readAsDataURL(file);
-        e.target.value = '';
+        inp.click();
+    }
+
+    // ── UPLOAD IMAGES (multi) ───────────────────────────────
+    $('#at-upload-many').addEventListener('click', () => {
+        const brush = _getBrush(); if (!brush) return;
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+        inp.onchange = async e => {
+            const files = Array.from(e.target.files || [])
+                .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+            const max = Math.min(files.length, SLOTS);
+            for (let i = 0; i < max; i++) {
+                brush.tiles[i] = await new Promise(res => {
+                    const fr = new FileReader();
+                    fr.onload = ev => res(ev.target.result);
+                    fr.readAsDataURL(files[i]);
+                });
+            }
+            imgCache.delete(brush.id);
+            _renderBrushForm();
+            _drawMap();
+        };
+        inp.click();
     });
 
-    // ── Map settings helper ──────────────────────────────────────
-    function _applyMapSettings() {
-        const nc = Math.max(1, parseInt($('#at-cols').value)  || d.cols);
-        const nr = Math.max(1, parseInt($('#at-rows').value)  || d.rows);
-        const tw = Math.max(4, parseInt($('#at-tw').value)    || d.tileW);
-        const th = Math.max(4, parseInt($('#at-th').value)    || d.tileH);
-        const fm = $('#at-filter').value || d.filterMode;
-        const newCells = new Int16Array(nc * nr).fill(-1);
-        for (let r = 0; r < Math.min(nr, d.rows); r++)
-            for (let c = 0; c < Math.min(nc, d.cols); c++)
-                newCells[r*nc+c] = d.cells[r*d.cols+c];
-        d.cols = nc; d.rows = nr; d.tileW = tw; d.tileH = th;
-        d.cells = newCells; d.filterMode = fm;
-    }
-
-    // ── MAP DRAWING VIEW ─────────────────────────────────────────
-    // bitmaskToSlot: maps 4-neighbor bitmask → which of the 16 slots to render
-    const bitmaskToSlot = {
-        0: 15, 1: 11, 2: 12, 3: 6,  4: 9,  5: 10, 6: 0,  7: 3,
-        8: 14, 9: 8,  10: 13, 11: 7, 12: 2, 13: 5, 14: 1, 15: 4
-    };
-
-    const canvas = $('#at-draw-canvas');
-    const ctx    = canvas.getContext('2d');
-    let brushImages      = new Array(SLOTS).fill(null);
-    let isDrawingMap     = false;
-    let currentDrawAction = 1;
-    let hoverX = -1, hoverY = -1;
-
-    function _initDrawCanvas() {
-        _applyMapSettings();
-        canvas.width  = d.cols * d.tileW;
-        canvas.height = d.rows * d.tileH;
-        const sharp = d.filterMode === 'pixelated';
-        canvas.style.imageRendering = sharp ? 'pixelated' : 'auto';
-        ctx.imageSmoothingEnabled   = !sharp;
-    }
-
-    function _loadBrushImages() {
-        brushImages = new Array(SLOTS).fill(null);
-        $$('.at-drop-target').forEach(target => {
-            const slotId = parseInt(target.dataset.slot);
-            const src = target.dataset.imgSrc;
-            if (src) { const im = new Image(); im.src = src; brushImages[slotId] = im; }
-        });
-        const brush = _getBrush();
-        if (brush) {
-            for (let i = 0; i < SLOTS; i++) {
-                if (!brushImages[i] && brush.tiles[i]) {
-                    const im = new Image(); im.src = brush.tiles[i]; brushImages[i] = im;
-                }
-            }
-        }
-    }
-
-    function _calcBitmask(x, y) {
-        let m = 0;
-        if (y > 0            && d.cells[(y-1)*d.cols+x  ] >= 0) m |= 1;
-        if (x < d.cols-1     && d.cells[ y   *d.cols+x+1] >= 0) m |= 2;
-        if (y < d.rows-1     && d.cells[(y+1)*d.cols+x  ] >= 0) m |= 4;
-        if (x > 0            && d.cells[ y   *d.cols+x-1] >= 0) m |= 8;
-        return m;
-    }
-
-    function renderMapCanvas() {
-        const TW = d.tileW, TH = d.tileH;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
-        for (let x = 0; x <= d.cols; x++) {
-            ctx.beginPath(); ctx.moveTo(x*TW, 0); ctx.lineTo(x*TW, canvas.height); ctx.stroke();
-        }
-        for (let y = 0; y <= d.rows; y++) {
-            ctx.beginPath(); ctx.moveTo(0, y*TH); ctx.lineTo(canvas.width, y*TH); ctx.stroke();
-        }
-        for (let y = 0; y < d.rows; y++) {
-            for (let x = 0; x < d.cols; x++) {
-                if (d.cells[y*d.cols+x] >= 0) {
-                    const slot = bitmaskToSlot[_calcBitmask(x, y)];
-                    const im   = brushImages[slot];
-                    if (im && im.complete && im.naturalWidth > 0) {
-                        ctx.drawImage(im, x*TW, y*TH, TW, TH);
-                    } else {
-                        ctx.fillStyle = '#f472b6';
-                        ctx.fillRect(x*TW, y*TH, TW, TH);
-                        ctx.fillStyle = 'white'; ctx.font = '9px sans-serif';
-                        ctx.fillText(`${_calcBitmask(x,y)}`, x*TW+4, y*TH+18);
+    // ── UPLOAD BRUSH IMAGE (single 4×4 sheet) ────────────────
+    $('#at-upload-sheet').addEventListener('click', () => {
+        const brush = _getBrush(); if (!brush) return;
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = 'image/*';
+        inp.onchange = e => {
+            const f = e.target.files[0]; if (!f) return;
+            const fr = new FileReader();
+            fr.onload = ev => {
+                const img = new Image();
+                img.onload = () => {
+                    const sw = Math.floor(img.width / 4);
+                    const sh = Math.floor(img.height / 4);
+                    for (let i = 0; i < SLOTS; i++) {
+                        const sc = i % 4, sr = Math.floor(i / 4);
+                        const cv = document.createElement('canvas');
+                        cv.width = sw; cv.height = sh;
+                        const cx = cv.getContext('2d');
+                        cx.imageSmoothingEnabled = d.filterMode !== 'pixelated';
+                        cx.drawImage(img, sc * sw, sr * sh, sw, sh, 0, 0, sw, sh);
+                        brush.tiles[i] = cv.toDataURL('image/png');
                     }
+                    brush.tileW = sw; brush.tileH = sh;
+                    imgCache.delete(brush.id);
+                    _renderBrushForm();
+                    _drawMap();
+                };
+                img.src = ev.target.result;
+            };
+            fr.readAsDataURL(f);
+        };
+        inp.click();
+    });
+
+    // ── Toggle preview tile guides ───────────────────────────
+    $('#at-toggle-guides').addEventListener('click', () => {
+        guidesOn = !guidesOn;
+        $('#at-guides-label').textContent = guidesOn ? 'Tile guides ON' : 'Tile guides OFF';
+        _drawPreview();
+    });
+
+    // ── Download preview ─────────────────────────────────────
+    $('#at-download-preview').addEventListener('click', () => {
+        const url = preview.toDataURL('image/png');
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (_getBrush()?.name || 'brush') + '_preview.png';
+        a.click();
+    });
+
+    // ── Brush preview canvas ─────────────────────────────────
+    function _drawPreview() {
+        const brush = _getBrush();
+        // Use a small demo blob shape that exercises many neighbor configs
+        const cells = [
+            [0,1,1,1,0],
+            [1,1,1,1,1],
+            [1,1,1,1,1],
+            [0,1,1,0,0],
+        ];
+        const rows = cells.length, cols = cells[0].length;
+        const tw = (brush?.tileW) || d.tileW;
+        const th = (brush?.tileH) || d.tileH;
+        // Display target ~280px wide
+        const cssW = 280;
+        const scale = cssW / (cols * tw);
+        preview.width  = cols * tw;
+        preview.height = rows * th;
+        preview.style.width  = (cols * tw * scale) + 'px';
+        preview.style.height = (rows * th * scale) + 'px';
+        preview.style.imageRendering = (d.filterMode === 'pixelated') ? 'pixelated' : 'auto';
+        pctx.imageSmoothingEnabled = d.filterMode !== 'pixelated';
+
+        pctx.fillStyle = '#cfd4dd';
+        pctx.fillRect(0, 0, preview.width, preview.height);
+
+        if (brush) {
+            const imgs = _brushImgs(brush);
+            const isFilled = (c, r) => (cells[r] && cells[r][c]) ? 1 : 0;
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    if (!isFilled(c, r)) continue;
+                    let m = 0;
+                    if (isFilled(c, r-1)) m |= 1;
+                    if (isFilled(c+1, r)) m |= 2;
+                    if (isFilled(c, r+1)) m |= 4;
+                    if (isFilled(c-1, r)) m |= 8;
+                    const slot = _resolveSlot(brush, m);
+                    if (slot < 0) continue;
+                    const im = imgs[slot];
+                    if (im && im.complete) pctx.drawImage(im, c * tw, r * th, tw, th);
                 }
             }
         }
-        if (hoverX >= 0 && hoverX < d.cols && hoverY >= 0 && hoverY < d.rows) {
-            const erasing = currentDrawAction === 0;
-            const color   = erasing ? '#ef4444' : '#3b82f6';
-            ctx.fillStyle = erasing ? 'rgba(239,68,68,0.2)' : 'rgba(59,130,246,0.2)';
-            ctx.fillRect(hoverX*TW, hoverY*TH, TW, TH);
-            ctx.strokeStyle = color; ctx.lineWidth = 2;
-            ctx.strokeRect(hoverX*TW, hoverY*TH, TW, TH);
-            ctx.beginPath();
-            ctx.moveTo(hoverX*TW+TW/2, hoverY*TH+TH/2-5);
-            ctx.lineTo(hoverX*TW+TW/2, hoverY*TH+TH/2+5);
-            ctx.moveTo(hoverX*TW+TW/2-5, hoverY*TH+TH/2);
-            ctx.lineTo(hoverX*TW+TW/2+5, hoverY*TH+TH/2);
-            ctx.stroke();
+        if (guidesOn) {
+            pctx.strokeStyle = 'rgba(80,90,110,0.5)'; pctx.lineWidth = 1;
+            pctx.beginPath();
+            for (let c = 0; c <= cols; c++) { pctx.moveTo(c*tw, 0); pctx.lineTo(c*tw, preview.height); }
+            for (let r = 0; r <= rows; r++) { pctx.moveTo(0, r*th); pctx.lineTo(preview.width, r*th); }
+            pctx.stroke();
         }
     }
 
-    function _updateHover(e) {
-        const rect = canvas.getBoundingClientRect();
-        hoverX = Math.floor(((e.clientX-rect.left)*(canvas.width /rect.width )) / d.tileW);
-        hoverY = Math.floor(((e.clientY-rect.top) *(canvas.height/rect.height)) / d.tileH);
+    // ── Map painter ──────────────────────────────────────────
+    function _initMap() {
+        map.width  = d.cols * d.tileW;
+        map.height = d.rows * d.tileH;
+        mov.width  = map.width;
+        mov.height = map.height;
+        const sharp = d.filterMode === 'pixelated';
+        for (const cv of [map, mov]) cv.style.imageRendering = sharp ? 'pixelated' : 'auto';
+        for (const cx of [mctx, moctx]) { cx.imageSmoothingEnabled = !sharp; cx.imageSmoothingQuality = 'high'; }
     }
 
-    function _drawAction() {
-        const i = hoverY*d.cols+hoverX;
-        if (hoverX < 0 || hoverX >= d.cols || hoverY < 0 || hoverY >= d.rows) return;
-        const brushId = activeBrushId;
-        let bIdx = brushId ? d.brushList.indexOf(brushId) : -1;
-        if (bIdx < 0 && brushId) { d.brushList.push(brushId); bIdx = d.brushList.length - 1; }
-        const newVal = currentDrawAction === 0 ? -1 : (bIdx >= 0 ? bIdx : 0);
-        if (d.cells[i] !== newVal) d.cells[i] = newVal;
-        renderMapCanvas();
-    }
+    function _drawMap() {
+        mctx.fillStyle = '#161a1f';
+        mctx.fillRect(0, 0, map.width, map.height);
 
-    canvas.addEventListener('mousedown', e => {
-        isDrawingMap     = true;
-        currentDrawAction = e.button === 2 ? 0 : 1;
-        _updateHover(e); _drawAction();
-    });
-    canvas.addEventListener('mouseleave', () => { hoverX = -1; hoverY = -1; renderMapCanvas(); });
-
-    const _mapMouseMove = e => {
-        if (e.target === canvas || canvas.contains(e.target)) {
-            _updateHover(e);
-            if (isDrawingMap) _drawAction(); else renderMapCanvas();
-        } else if (hoverX !== -1) {
-            hoverX = -1; hoverY = -1; renderMapCanvas();
+        for (let i = 0; i < d.cells.length; i++) {
+            const bIdx = d.cells[i];
+            if (bIdx < 0) continue;
+            const brushId = d.brushList[bIdx];
+            const brush = state.tilesetBrushes.find(b => b.id === brushId);
+            if (!brush) continue;
+            const col = i % d.cols, row = Math.floor(i / d.cols);
+            const slot = _resolveSlot(brush, _mask(d, col, row));
+            if (slot < 0) continue;
+            const imgs = _brushImgs(brush);
+            const im = imgs[slot];
+            if (im && im.complete) {
+                mctx.drawImage(im, col * d.tileW, row * d.tileH, d.tileW, d.tileH);
+            }
         }
-    };
-    window.addEventListener('mousemove', _mapMouseMove);
-    window.addEventListener('mouseup',   () => { isDrawingMap = false; });
 
-    // ── Navigation ───────────────────────────────────────────────
-    const editorView = $('#at-editor-view');
-    const drawView   = $('#at-draw-view');
+        mctx.strokeStyle = 'rgba(74,222,128,0.18)'; mctx.lineWidth = 0.5;
+        mctx.beginPath();
+        for (let c = 0; c <= d.cols; c++) { mctx.moveTo(c*d.tileW, 0); mctx.lineTo(c*d.tileW, map.height); }
+        for (let r = 0; r <= d.rows; r++) { mctx.moveTo(0, r*d.tileH); mctx.lineTo(map.width, r*d.tileH); }
+        mctx.stroke();
+        mctx.strokeStyle = 'rgba(74,222,128,0.55)'; mctx.lineWidth = 2;
+        mctx.strokeRect(0, 0, map.width, map.height);
+    }
 
-    $('#at-go-to-draw-btn').addEventListener('click', () => {
-        _initDrawCanvas();
-        _loadBrushImages();
-        editorView.style.display = 'none';
-        drawView.style.display   = 'flex';
-        renderMapCanvas();
+    function _getCell(e) {
+        const rect = map.getBoundingClientRect();
+        const mx = (e.clientX - rect.left) * (map.width  / rect.width);
+        const my = (e.clientY - rect.top)  * (map.height / rect.height);
+        return { c: Math.floor(mx / d.tileW), r: Math.floor(my / d.tileH) };
+    }
+    function _validCell(c, r) { return c >= 0 && c < d.cols && r >= 0 && r < d.rows; }
+
+    function _ensureBrushIdx(brushId) {
+        let idx = d.brushList.indexOf(brushId);
+        if (idx < 0) { d.brushList.push(brushId); idx = d.brushList.length - 1; }
+        return idx;
+    }
+
+    function _paintCell(c, r) {
+        if (!_validCell(c, r)) return;
+        const i = r * d.cols + c;
+        if (tool === 'paint') {
+            if (!activeBrushId) return;
+            const idx = _ensureBrushIdx(activeBrushId);
+            if (d.cells[i] === idx) return;
+            d.cells[i] = idx;
+        } else if (tool === 'erase') {
+            if (d.cells[i] === -1) return;
+            d.cells[i] = -1;
+        }
+        _drawMap();
+    }
+
+    function _fill(c, r) {
+        if (!_validCell(c, r)) return;
+        const target = d.cells[r * d.cols + c];
+        const replaceIdx = tool === 'erase' ? -1
+            : (activeBrushId ? _ensureBrushIdx(activeBrushId) : -1);
+        if (target === replaceIdx) return;
+        const queue = [[c, r]];
+        const visited = new Uint8Array(d.cols * d.rows);
+        while (queue.length) {
+            const [cc, cr] = queue.shift();
+            if (!_validCell(cc, cr)) continue;
+            const idx = cr * d.cols + cc;
+            if (visited[idx] || d.cells[idx] !== target) continue;
+            visited[idx] = 1;
+            d.cells[idx] = replaceIdx;
+            queue.push([cc-1,cr],[cc+1,cr],[cc,cr-1],[cc,cr+1]);
+        }
+        _drawMap();
+    }
+
+    function _pushUndo() {
+        undoStack.push({ cells: new Int16Array(d.cells), brushList: d.brushList.slice() });
+        if (undoStack.length > 30) undoStack.shift();
+    }
+    function _undo() {
+        if (!undoStack.length) return;
+        const s = undoStack.pop();
+        d.cells = s.cells; d.brushList = s.brushList;
+        _drawMap();
+    }
+
+    map.addEventListener('mousedown', e => {
+        const { c, r } = _getCell(e);
+        if (!_validCell(c, r)) return;
+        _pushUndo();
+        if (tool === 'fill') { _fill(c, r); return; }
+        if (tool === 'pick') {
+            const idx = r * d.cols + c;
+            if (d.cells[idx] >= 0) {
+                activeBrushId = d.brushList[d.cells[idx]];
+                brushSel.value = activeBrushId || '';
+                _renderBrushForm();
+            }
+            setTool('paint'); return;
+        }
+        isPainting = true;
+        _paintCell(c, r);
+    });
+    window.addEventListener('mouseup', () => { isPainting = false; });
+    map.addEventListener('mousemove', e => {
+        const { c, r } = _getCell(e);
+        $('#at-cursor-info').textContent =
+            _validCell(c, r) ? `Col ${c+1}, Row ${r+1}  (brush ${d.cells[r*d.cols+c]})` : '';
+        moctx.clearRect(0, 0, map.width, map.height);
+        if (_validCell(c, r)) {
+            const brush = _getBrush();
+            if (tool === 'paint' && brush) {
+                const imgs = _brushImgs(brush);
+                const slot = _resolveSlot(brush, 0);
+                if (slot >= 0 && imgs[slot] && imgs[slot].complete) {
+                    moctx.globalAlpha = 0.55;
+                    moctx.drawImage(imgs[slot], c*d.tileW, r*d.tileH, d.tileW, d.tileH);
+                    moctx.globalAlpha = 1;
+                }
+            }
+            moctx.strokeStyle = '#facc15'; moctx.lineWidth = 2;
+            moctx.strokeRect(c*d.tileW+1, r*d.tileH+1, d.tileW-2, d.tileH-2);
+        }
+        if (isPainting && (tool === 'paint' || tool === 'erase')) _paintCell(c, r);
+    });
+    map.addEventListener('mouseleave', () => {
+        moctx.clearRect(0, 0, map.width, map.height);
+        $('#at-cursor-info').textContent = '';
     });
 
-    $('#at-back-to-editor-btn').addEventListener('click', () => {
-        drawView.style.display   = 'none';
-        editorView.style.display = 'flex';
-        window.removeEventListener('mousemove', _mapMouseMove);
-    });
-
-    $('#at-clear-map-btn').addEventListener('click', () => {
-        d.cells = new Int16Array(d.cols * d.rows).fill(-1);
-        renderMapCanvas();
-    });
-
-    // ── Close ────────────────────────────────────────────────────
-    $('#at-close').addEventListener('click', () => {
-        _applyMapSettings();
-        rebuildAutoTileSprites(obj);
-        _buildHelper(obj);
-        import('./engine.ui.js').then(m => { m.syncPixiToInspector(); m.refreshHierarchy(); });
-        panel.remove();
-        window.removeEventListener('keydown', _onKey);
-        window.removeEventListener('mousemove', _slotEraseMove);
-        window.removeEventListener('mouseup',   _slotEraseEnd);
-        window.removeEventListener('touchmove', _slotEraseMove);
-        window.removeEventListener('touchend',  _slotEraseEnd);
-        window.removeEventListener('mousemove', _mapMouseMove);
-        window.removeEventListener('mouseup',   () => { isDrawingMap = false; });
-    });
+    function setTool(t) {
+        tool = t;
+        panel.querySelectorAll('.at-tool').forEach(b => b.classList.toggle('tool-active', b.dataset.tool === t));
+    }
+    panel.querySelectorAll('.at-tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
 
     const _onKey = e => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-        if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); }
+        if (e.key === 'b' || e.key === 'B') setTool('paint');
+        if (e.key === 'e' || e.key === 'E') setTool('erase');
+        if (e.key === 'f' || e.key === 'F') setTool('fill');
+        if (e.key === 'i' || e.key === 'I') setTool('pick');
+        if ((e.ctrlKey||e.metaKey) && e.key === 'z') { e.preventDefault(); _undo(); }
     };
     window.addEventListener('keydown', _onKey);
 
+    // Apply settings (resize / render mode)
+    $('#at-apply').addEventListener('click', () => {
+        const nc = Math.max(1, parseInt($('#at-cols').value)||20);
+        const nr = Math.max(1, parseInt($('#at-rows').value)||15);
+        const tw = Math.max(4, parseInt($('#at-tw').value)||32);
+        const th = Math.max(4, parseInt($('#at-th').value)||32);
+        const fm = $('#at-filter').value;
+        const newCells = new Int16Array(nc * nr).fill(-1);
+        for (let r = 0; r < Math.min(nr, d.rows); r++) {
+            for (let c = 0; c < Math.min(nc, d.cols); c++) {
+                newCells[r*nc + c] = d.cells[r*d.cols + c];
+            }
+        }
+        d.cols = nc; d.rows = nr; d.tileW = tw; d.tileH = th;
+        d.cells = newCells; d.filterMode = fm;
+        _initMap(); _drawMap(); _renderBrushForm();
+    });
+
+    // Init
+    _initMap();
+    _drawMap();
+    _populateBrushes();
+}
 
 // ── Inspector HTML ───────────────────────────────────────────
 export function buildAutoTileInspectorHTML(obj) {
