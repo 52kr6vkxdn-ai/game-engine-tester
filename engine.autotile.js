@@ -1,64 +1,208 @@
 /* ============================================================
    Zengine — engine.autotile.js
-   AUTO-TILEMAP — entirely separate from engine.tilemap.js.
+   Auto-tile brush system: 16-tile (4×4 blob) neighbor-aware
+   tilemap painter, integrated as a first-class scene object.
 
-   Concept:
-     * The user trains a "Brush" by uploading 16 small tile
-       images (one per neighbor configuration). The trained
-       brush lives in state.tilesetBrushes and is reusable
-       across auto-tilemaps.
-     * Painting on an Auto-Tilemap object marks each cell as
-       "filled with brush X". On render, the engine looks at
-       each cell's 4-neighbor mask (N/E/S/W) and picks the
-       matching trained tile from the brush.
-
-   Per Auto-Tilemap object:
-     obj.isAutoTilemap = true
-     obj.autoTileData = {
-       tileW, tileH, cols, rows,
-       cells:      Int16Array     // brush index into brushList, -1 = empty
-       brushList:  string[]       // brush IDs referenced by this map
-       filterMode: 'pixelated'|'smooth'
-     }
-
-   A trained brush:
-     {
-       id, name,
-       type: '16-tile',
-       tileW, tileH,
-       tiles: Array<string|null>     // length 16, dataURL per neighbor mask
-                                     // bit0=N, bit1=E, bit2=S, bit3=W
-     }
+   Exported surface (contract with engine.core / engine.ui / engine.scenes):
+     createAutoTilemap(x?, y?)       → PIXI.Container
+     restoreAutoTilemap(snapshot)    → Promise<PIXI.Container>
+     buildAutoTileInspectorHTML(obj) → string
+     openAutoTileEditor(obj)         → void
+     rebuildAutoTileSprites(obj)     → void
    ============================================================ */
 
 import { state } from './engine.state.js';
 
-const SLOTS = 16;
+// ── Constants ─────────────────────────────────────────────────
+const TILE_SIZE    = 40;
+const DEFAULT_COLS = 20;
+const DEFAULT_ROWS = 15;
 
-// ── Object factory ───────────────────────────────────────────
+/**
+ * 4-neighbor bitmask → slot index (0-15) in the brush tile array.
+ * Bitmask bits:  N=1  E=2  S=4  W=8
+ */
+const BITMASK_TO_SLOT = {
+     0: 15,  1: 11,  2: 12,  3:  6,
+     4:  9,  5: 10,  6:  0,  7:  3,
+     8: 14,  9:  8, 10: 13, 11:  7,
+    12:  2, 13:  5, 14:  1, 15:  4,
+};
+
+// ─────────────────────────────────────────────────────────────
+// Internal helpers
+// ─────────────────────────────────────────────────────────────
+
+function _uniqueName(base) {
+    const existing = new Set(state.gameObjects.map(o => o.label));
+    if (!existing.has(base)) return base;
+    let i = 2;
+    while (existing.has(`${base} (${i})`)) i++;
+    return `${base} (${i})`;
+}
+
+function _attachTranslateGizmo(container) {
+    const gc = new PIXI.Container();
+    container.addChild(gc);
+    container._gizmoContainer = gc;
+
+    const g1 = _makeAxisLine(0xFF4F4B, 50, false);
+    const g2 = _makeAxisLine(0x8FC93A, 50, true);
+    const g3 = _makeSquare();
+
+    const grpT = new PIXI.Container(); grpT.addChild(g1, g2, g3);
+    const grpR = new PIXI.Container(); grpR.visible = false;
+    const grpS = new PIXI.Container(); grpS.visible = false;
+
+    container._grpTranslate = grpT;
+    container._grpRotate    = grpR;
+    container._grpScale     = grpS;
+    gc.addChild(grpT, grpR, grpS);
+
+    container._gizmoHandles = {
+        transX: g1, transY: g2, transCenter: g3,
+        scaleX: g1, scaleY: g2, scaleCenter: g3,
+        rotRing: g3,
+    };
+    [g1, g2, g3].forEach(h => h.on('pointerdown', e => e.stopPropagation()));
+}
+
+function _makeAxisLine(color, len, isY) {
+    const g = new PIXI.Graphics();
+    g.beginFill(color);
+    g.lineStyle(2, color);
+    if (isY) g.drawRect(-1, -len, 2, len);
+    else     g.drawRect(0, -1, len, 2);
+    g.lineStyle(0);
+    if (isY) { g.moveTo(-5, -len); g.lineTo(0, -len - 9); g.lineTo(5, -len); }
+    else     { g.moveTo(len, -5);  g.lineTo(len + 9, 0);   g.lineTo(len, 5); }
+    g.endFill();
+    g.eventMode = 'static';
+    return g;
+}
+
+function _makeSquare() {
+    const g = new PIXI.Graphics();
+    g.beginFill(0xFFFFFF, 0.4);
+    g.drawRect(-7, -7, 14, 14);
+    g.endFill();
+    g.eventMode = 'static';
+    g.cursor    = 'move';
+    return g;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Wireframe helper drawn in editor space
+// ─────────────────────────────────────────────────────────────
+
+function _buildAutoTileHelper(container) {
+    if (container._autoTileHelper) {
+        container.removeChild(container._autoTileHelper);
+        try { container._autoTileHelper.destroy(); } catch (_) {}
+    }
+
+    const d = container.autoTileData;
+    const W = d.cols * d.tileW;
+    const H = d.rows * d.tileH;
+
+    const g = new PIXI.Graphics();
+    g.lineStyle(1, 0x4ade80, 0.7);
+    g.drawRect(0, 0, W, H);
+    g.lineStyle(0.5, 0x4ade80, 0.18);
+    for (let x = 1; x < d.cols; x++) {
+        g.moveTo(x * d.tileW, 0); g.lineTo(x * d.tileW, H);
+    }
+    for (let y = 1; y < d.rows; y++) {
+        g.moveTo(0, y * d.tileH); g.lineTo(W, y * d.tileH);
+    }
+
+    const lbl = new PIXI.Text(`Auto-Tile  ${d.cols}×${d.rows}`, {
+        fontSize: 11, fill: 0x4ade80, fontFamily: 'sans-serif',
+    });
+    lbl.alpha = 0.65; lbl.x = 4; lbl.y = 2;
+
+    const helper = new PIXI.Container();
+    helper.addChild(g, lbl);
+    helper.isHelper = true;
+    container._autoTileHelper = helper;
+    container.addChildAt(helper, 0);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Sprite layer — rebuild from cell data + brush slots
+// ─────────────────────────────────────────────────────────────
+
+function _calcBitmask(d, col, row) {
+    let m = 0;
+    if (row > 0          && d.cells[(row - 1) * d.cols + col])         m += 1; // N
+    if (col < d.cols - 1 && d.cells[row       * d.cols + (col + 1)])   m += 2; // E
+    if (row < d.rows - 1 && d.cells[(row + 1) * d.cols + col])         m += 4; // S
+    if (col > 0          && d.cells[row       * d.cols + (col - 1)])   m += 8; // W
+    return m;
+}
+
+export function rebuildAutoTileSprites(container) {
+    if (container._spriteLayer) {
+        container.removeChild(container._spriteLayer);
+        try { container._spriteLayer.destroy({ children: true }); } catch (_) {}
+    }
+
+    const layer = new PIXI.Container();
+    container._spriteLayer = layer;
+
+    // Insert just above the wireframe helper (index 1 if helper present, 0 otherwise)
+    const insertIdx = container._autoTileHelper ? 1 : 0;
+    container.addChildAt(layer, insertIdx);
+
+    const d = container.autoTileData;
+    for (let row = 0; row < d.rows; row++) {
+        for (let col = 0; col < d.cols; col++) {
+            if (!d.cells[row * d.cols + col]) continue;
+            const mask    = _calcBitmask(d, col, row);
+            const slotId  = BITMASK_TO_SLOT[mask] ?? 15;
+            const dataURL = d.brushList[slotId];
+            if (!dataURL) continue;
+
+            const tex = PIXI.Texture.from(dataURL);
+            const spr = new PIXI.Sprite(tex);
+            spr.x     = col * d.tileW;
+            spr.y     = row * d.tileH;
+            spr.width  = d.tileW;
+            spr.height = d.tileH;
+            layer.addChild(spr);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Public: create a new Auto-Tilemap object in the scene
+// ─────────────────────────────────────────────────────────────
+
 export function createAutoTilemap(x = 0, y = 0) {
-    const label = _uniqueName('AutoTilemap');
+    const label = _uniqueName('Auto-Tile');
 
     const container = new PIXI.Container();
     container.x = x; container.y = y;
-    container.isAutoTilemap = true;
-    container.isTilemap = false;
-    container.isLight   = false;
-    container.isImage   = false;
-    container.label     = label;
-    container.unityZ    = 0;
-    container.animations = [];
+
+    container.isAutoTilemap   = true;
+    container.isTilemap       = false;
+    container.isLight         = false;
+    container.isImage         = false;
+    container.label           = label;
+    container.unityZ          = 0;
+    container.animations      = [];
     container.activeAnimIndex = 0;
 
     container.autoTileData = {
-        tileW: 32, tileH: 32,
-        cols: 20, rows: 15,
-        cells:      new Int16Array(20 * 15).fill(-1),
-        brushList:  [],
-        filterMode: 'smooth',
+        tileW:     TILE_SIZE,
+        tileH:     TILE_SIZE,
+        cols:      DEFAULT_COLS,
+        rows:      DEFAULT_ROWS,
+        brushList: new Array(16).fill(null),           // dataURLs per slot
+        cells:     new Uint8Array(DEFAULT_COLS * DEFAULT_ROWS), // 1=filled
     };
 
-    _buildHelper(container);
+    _buildAutoTileHelper(container);
     _attachTranslateGizmo(container);
     if (state._bindGizmoHandles) state._bindGizmoHandles(container);
 
@@ -66,7 +210,7 @@ export function createAutoTilemap(x = 0, y = 0) {
     state.gameObjects.push(container);
 
     container.eventMode = 'static';
-    container.cursor = 'pointer';
+    container.cursor    = 'pointer';
     container.on('pointerdown', e => {
         if (state.isPlaying) { e.stopPropagation(); return; }
         if (e.button !== 0) return;
@@ -79,814 +223,75 @@ export function createAutoTilemap(x = 0, y = 0) {
     return container;
 }
 
-function _migrate(d) {
-    const len = d.cols * d.rows;
-    if (!d.cells || d.cells.length !== len) {
-        const nc = new Int16Array(len).fill(-1);
-        if (d.cells) for (let i = 0; i < Math.min(len, d.cells.length); i++) nc[i] = d.cells[i];
-        d.cells = nc;
-    }
-    if (!Array.isArray(d.brushList)) d.brushList = [];
-    if (!d.filterMode) d.filterMode = 'smooth';
-}
+// ─────────────────────────────────────────────────────────────
+// Public: restore from a snapshot (scenes / copy-paste)
+// ─────────────────────────────────────────────────────────────
 
-// ── Editor wireframe helper (in scene) ───────────────────────
-function _buildHelper(container) {
-    if (container._helper) {
-        container.removeChild(container._helper);
-        try { container._helper.destroy(); } catch(_) {}
-    }
-    const d = container.autoTileData;
-    const g = new PIXI.Graphics();
-    const W = d.cols * d.tileW;
-    const H = d.rows * d.tileH;
+export async function restoreAutoTilemap(s) {
+    const obj  = createAutoTilemap(s.x, s.y);
+    obj.label  = s.label;
+    obj.unityZ = s.unityZ || 0;
 
-    g.beginFill(0x14252a, 0.6); g.drawRect(0, 0, W, H); g.endFill();
-    g.lineStyle(1, 0x4ade80, 0.20);
-    for (let c = 0; c <= d.cols; c++) { g.moveTo(c * d.tileW, 0); g.lineTo(c * d.tileW, H); }
-    for (let r = 0; r <= d.rows; r++) { g.moveTo(0, r * d.tileH); g.lineTo(W, r * d.tileH); }
-    g.lineStyle(2, 0x4ade80, 0.7);
-    g.drawRect(0, 0, W, H);
-    const text = new PIXI.Text('AUTO TILEMAP', {
-        fontFamily: 'monospace', fontSize: 10, fill: 0x4ade80, alpha: 0.55,
-    });
-    text.x = 4; text.y = 4;
-    g.addChild(text);
-
-    container._helper = g;
-    container.addChildAt(g, 0);
-    g.eventMode = 'none';
-}
-
-// ── Neighbor-mask computation ────────────────────────────────
-function _mask(d, c, r) {
-    const i = r * d.cols + c;
-    const b = d.cells[i];
-    if (b < 0) return 0;
-    const same = (cc, rr) => {
-        if (cc < 0 || cc >= d.cols || rr < 0 || rr >= d.rows) return true;
-        return d.cells[rr * d.cols + cc] === b;
+    const td = s.autoTileData;
+    obj.autoTileData = {
+        tileW:     td.tileW     ?? TILE_SIZE,
+        tileH:     td.tileH     ?? TILE_SIZE,
+        cols:      td.cols      ?? DEFAULT_COLS,
+        rows:      td.rows      ?? DEFAULT_ROWS,
+        brushList: td.brushList ? td.brushList.slice() : new Array(16).fill(null),
+        cells: td.cells instanceof Uint8Array
+            ? td.cells
+            : new Uint8Array(td.cells),
     };
-    let m = 0;
-    if (same(c,   r-1)) m |= 1;
-    if (same(c+1, r  )) m |= 2;
-    if (same(c,   r+1)) m |= 4;
-    if (same(c-1, r  )) m |= 8;
-    return m;
+
+    _buildAutoTileHelper(obj);
+    rebuildAutoTileSprites(obj);
+    return obj;
 }
 
-// Choose the best available trained slot for a mask
-function _resolveSlot(brush, mask) {
-    if (brush.tiles[mask]) return mask;
-    for (let i = 0; i < 4; i++) {
-        const m2 = mask & ~(1 << i);
-        if (brush.tiles[m2]) return m2;
-    }
-    if (brush.tiles[15]) return 15;
-    if (brush.tiles[0])  return 0;
-    for (let i = 0; i < SLOTS; i++) if (brush.tiles[i]) return i;
-    return -1;
-}
+// ─────────────────────────────────────────────────────────────
+// Public: inspector HTML (shown in right panel)
+// ─────────────────────────────────────────────────────────────
 
-// ── PIXI sprite cache for brush slot dataURLs ────────────────
-const _texCache = new Map();
-function _texFor(dataURL, smooth) {
-    const key = (smooth ? 'L:' : 'N:') + dataURL.length + ':' + dataURL.slice(-32);
-    let tex = _texCache.get(key);
-    if (tex) return tex;
-    tex = PIXI.Texture.from(dataURL);
-    if (tex.baseTexture) {
-        tex.baseTexture.scaleMode = smooth ? PIXI.SCALE_MODES.LINEAR : PIXI.SCALE_MODES.NEAREST;
-    }
-    _texCache.set(key, tex);
-    return tex;
-}
-
-// ── Rebuild PIXI sprites for an auto-tilemap object ──────────
-export function rebuildAutoTileSprites(container) {
-    if (container._tileContainer) {
-        container.removeChild(container._tileContainer);
-        try { container._tileContainer.destroy({ children: true }); } catch(_) {}
-    }
-    const d = container.autoTileData;
-    _migrate(d);
-    const smooth = d.filterMode !== 'pixelated';
-    const cell = new PIXI.Container();
-
-    for (let i = 0; i < d.cells.length; i++) {
-        const bIdx = d.cells[i];
-        if (bIdx < 0) continue;
-        const brushId = d.brushList[bIdx];
-        const brush = state.tilesetBrushes.find(b => b.id === brushId);
-        if (!brush) continue;
-        const col = i % d.cols, row = Math.floor(i / d.cols);
-        const slot = _resolveSlot(brush, _mask(d, col, row));
-        if (slot < 0) continue;
-        const tex = _texFor(brush.tiles[slot], smooth);
-        const sp = new PIXI.Sprite(tex);
-        sp.x = col * d.tileW; sp.y = row * d.tileH;
-        sp.width = d.tileW; sp.height = d.tileH;
-        cell.addChild(sp);
-    }
-
-    container._tileContainer = cell;
-    const gizmoIdx = container.children.indexOf(container._gizmoContainer);
-    if (gizmoIdx >= 0) container.addChildAt(cell, gizmoIdx);
-    else container.addChild(cell);
-}
-
-// ============================================================
-//                       EDITOR PANEL
-// ============================================================
-export function openAutoTileEditor(obj) {
-    document.getElementById('at-editor')?.remove();
-    _migrate(obj.autoTileData);
-
-    const panel = document.createElement('div');
-    panel.id = 'at-editor';
-    panel.style.cssText = `
-        position:fixed;inset:0;z-index:15000;background:rgba(0,0,0,0.92);
-        display:flex;font-family:'Inter','Segoe UI',sans-serif;font-size:11px;color:#d8d8e8;
-    `;
-
-    panel.innerHTML = `
-    <div style="display:flex;width:100%;height:100%;">
-
-      <!-- LEFT: Brush trainer (matches the reference UI) -->
-      <div style="width:380px;flex-shrink:0;background:#f4f6fa;color:#222;
-                  border-right:1px solid #2e2e3a;display:flex;flex-direction:column;overflow:hidden;">
-        <!-- Header -->
-        <div style="padding:12px 16px;display:flex;align-items:center;gap:8px;flex-shrink:0;
-                    border-bottom:1px solid #e0e3e9;">
-          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:#4ade80;stroke-width:2;">
-            <rect x="3" y="3" width="18" height="18" rx="2"/>
-            <line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>
-            <line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>
-          </svg>
-          <span style="font-weight:700;color:#222;">Auto Tile Brush Trainer</span>
-          <div style="flex:1;"></div>
-          <button id="at-close" style="background:none;border:none;color:#888;cursor:pointer;font-size:18px;padding:2px 6px;">✕</button>
-        </div>
-
-        <div style="padding:14px 18px;overflow:auto;flex:1;">
-
-          <!-- Brush selector -->
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:14px;">
-            <select id="at-brush-select" style="flex:1;background:#fff;border:1px solid #cfd4dd;
-                    color:#222;border-radius:4px;padding:7px;font-size:12px;outline:none;">
-              <option value="">— Select brush —</option>
-            </select>
-            <button id="at-brush-new" title="New brush"
-              style="background:#fff;border:1px solid #4ade80;color:#16a34a;
-                     border-radius:4px;padding:6px 10px;font-size:12px;cursor:pointer;font-weight:600;">+ New</button>
-            <button id="at-brush-delete" title="Delete brush"
-              style="background:#fff;border:1px solid #e0a0a0;color:#b04040;
-                     border-radius:4px;padding:6px 8px;font-size:12px;cursor:pointer;">🗑</button>
-          </div>
-
-          <div id="at-brush-form" style="display:none;">
-
-            <!-- Brush Name -->
-            <div style="margin-bottom:12px;">
-              <label style="display:block;font-size:10px;color:#7a7e88;margin-bottom:4px;letter-spacing:.4px;">
-                Brush Name
-              </label>
-              <input id="at-brush-name" type="text"
-                     style="width:100%;background:transparent;border:none;border-bottom:1px solid #cfd4dd;
-                            color:#222;padding:6px 0;font-size:14px;font-weight:600;outline:none;">
-            </div>
-
-            <!-- Tileset Type -->
-            <div style="margin-bottom:18px;">
-              <label style="display:block;font-size:10px;color:#7a7e88;margin-bottom:4px;letter-spacing:.4px;">
-                Tileset Type
-              </label>
-              <select id="at-brush-type"
-                      style="width:100%;background:transparent;border:none;border-bottom:1px solid #cfd4dd;
-                             color:#222;padding:6px 0;font-size:14px;outline:none;">
-                <option value="16-tile" selected>16 Tiles</option>
-              </select>
-            </div>
-
-            <!-- Upload Images big button -->
-            <button id="at-upload-many"
-              style="width:100%;background:#fff;border:2px solid #5fa8e0;color:#1d77c0;
-                     border-radius:6px;padding:14px;font-size:13px;font-weight:700;letter-spacing:.6px;
-                     cursor:pointer;margin-bottom:16px;">
-              ⬆ UPLOAD IMAGES
-            </button>
-
-            <!-- Tile thumbnails grid -->
-            <div id="at-tiles-grid"
-                 style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:6px;">
-            </div>
-
-            <div style="font-size:10px;color:#9ba0aa;margin-top:4px;text-align:center;">
-              Click any thumbnail to upload a single tile.
-            </div>
-
-          </div>
-
-          <div id="at-brush-empty" style="text-align:center;color:#9ba0aa;padding:24px 0;font-size:12px;">
-            No brush selected.<br>Click <b>+ New</b> to create one.
-          </div>
-        </div>
-      </div>
-
-      <!-- MIDDLE: Brush Auto Tiler preview pane -->
-      <div style="width:340px;flex-shrink:0;background:#f4f6fa;color:#222;
-                  border-right:1px solid #2e2e3a;display:flex;flex-direction:column;overflow:hidden;">
-        <div style="padding:14px 16px;background:#fff;margin:14px;border-radius:8px;
-                    box-shadow:0 1px 4px rgba(0,0,0,.05);flex:1;overflow:auto;">
-          <div style="display:flex;align-items:center;margin-bottom:10px;">
-            <span style="font-weight:700;color:#222;">Brush Auto Tiler</span>
-            <div style="flex:1;"></div>
-            <button id="at-toggle-guides" style="background:none;border:none;color:#888;font-size:11px;cursor:pointer;
-                                                 display:flex;align-items:center;gap:4px;">
-              <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;">
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-              </svg>
-              <span id="at-guides-label">Tile guides OFF</span>
-            </button>
-          </div>
-
-          <canvas id="at-preview"
-                  style="display:block;width:100%;background:#cfd4dd;border-radius:4px;"></canvas>
-
-          <button id="at-download-preview"
-                  style="width:100%;margin-top:14px;background:#fff;border:1px solid #cfd4dd;color:#222;
-                         border-radius:6px;padding:10px;font-size:11px;font-weight:600;letter-spacing:.6px;
-                         cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
-            ⬇  DOWNLOAD PREVIEW
-          </button>
-          <button id="at-upload-sheet"
-                  style="width:100%;margin-top:8px;background:#fff;border:2px solid #5fa8e0;color:#1d77c0;
-                         border-radius:6px;padding:10px;font-size:11px;font-weight:700;letter-spacing:.6px;
-                         cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
-            ⬆  UPLOAD BRUSH IMAGE
-          </button>
-        </div>
-      </div>
-
-      <!-- RIGHT: Map painter -->
-      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#0e0e18;">
-        <div style="padding:8px 14px;border-bottom:1px solid #1e1e2e;font-size:10px;color:#9ba0aa;
-                    flex-shrink:0;display:flex;align-items:center;gap:10px;">
-          <span style="font-weight:700;color:#4ade80;letter-spacing:.6px;">PAINT MAP</span>
-          <span style="color:#3a3a48;">|</span>
-          <span id="at-cursor-info" style="color:#7a7a90;">Hover over map to paint</span>
-
-          <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
-            <span style="color:#7a7a90;">Render</span>
-            <select id="at-filter" style="background:#16161e;border:1px solid #3a3a48;color:#d8d8e8;
-                    border-radius:3px;padding:3px 6px;font-size:10px;outline:none;">
-              <option value="smooth">Smooth (curves)</option>
-              <option value="pixelated">Pixelated</option>
-            </select>
-            <span style="color:#7a7a90;">Cols</span>
-            <input id="at-cols" type="number" class="at-mini" min="1" max="512">
-            <span style="color:#7a7a90;">Rows</span>
-            <input id="at-rows" type="number" class="at-mini" min="1" max="512">
-            <span style="color:#7a7a90;">Tile</span>
-            <input id="at-tw" type="number" class="at-mini" min="4" max="512">
-            <span style="color:#7a7a90;">×</span>
-            <input id="at-th" type="number" class="at-mini" min="4" max="512">
-            <button id="at-apply" style="background:#1e3050;border:1px solid #3A72A5;color:#7aabcc;
-                    border-radius:3px;padding:3px 10px;font-size:10px;cursor:pointer;">Apply</button>
-
-            <span style="color:#3a3a48;margin:0 4px;">|</span>
-            <button class="at-tool tool-active" data-tool="paint" title="Paint (B)">🖌</button>
-            <button class="at-tool" data-tool="erase" title="Erase (E)">⌫</button>
-            <button class="at-tool" data-tool="fill"  title="Fill (F)">🪣</button>
-            <button class="at-tool" data-tool="pick"  title="Pick (I)">🎯</button>
-          </div>
-        </div>
-
-        <div style="flex:1;overflow:auto;padding:20px;display:flex;align-items:flex-start;justify-content:flex-start;">
-          <div style="position:relative;display:inline-block;flex-shrink:0;">
-            <canvas id="at-map" style="display:block;cursor:crosshair;"></canvas>
-            <canvas id="at-map-ov" style="position:absolute;inset:0;pointer-events:none;"></canvas>
-          </div>
-        </div>
-
-        <div style="padding:6px 14px;border-top:1px solid #1e1e2e;font-size:10px;color:#3a3a48;text-align:right;flex-shrink:0;">
-          B=Paint  E=Erase  F=Fill  I=Pick  Ctrl+Z=Undo
-        </div>
-      </div>
-    </div>
-
-    <style>
-      .at-thumb { aspect-ratio:1;background:#e6eaf0;border:1px dashed #c0c5d0;border-radius:4px;
-                  cursor:pointer;display:flex;align-items:center;justify-content:center;overflow:hidden;
-                  position:relative; }
-      .at-thumb:hover { border-color:#5fa8e0;background:#f0f4fa; }
-      .at-thumb img { width:100%;height:100%;object-fit:contain; }
-      .at-thumb .at-mask-num { position:absolute;top:1px;left:3px;font-size:8px;color:#7a7e88;font-family:monospace; }
-      .at-thumb.empty .at-empty { color:#bcc1cc;font-size:9px; }
-      .at-mini { width:48px;background:#16161e;border:1px solid #3a3a48;color:#d8d8e8;
-                 border-radius:3px;padding:3px 4px;font-size:10px;outline:none;text-align:right; }
-      .at-tool { background:#16161e;border:1px solid #2e2e3a;color:#9ba0aa;border-radius:3px;
-                 width:28px;height:24px;font-size:13px;cursor:pointer;line-height:1; }
-      .at-tool:hover { border-color:#4ade80;color:#4ade80; }
-      .at-tool.tool-active { border-color:#4ade80;background:#16321e;color:#4ade80; }
-      .pixelated { image-rendering:pixelated; }
-    </style>
-    `;
-    document.body.appendChild(panel);
-    _wireEditor(panel, obj);
-}
-
-function _wireEditor(panel, obj) {
-    const d = obj.autoTileData;
-    let activeBrushId = state.tilesetBrushes[0]?.id || null;
-    let tool = 'paint';
-    let isPainting = false;
-    let guidesOn = false;
-    const undoStack = [];
-    const imgCache = new Map(); // brushId -> Array<HTMLImageElement|null>
-
-    // ── References ───────────────────────────────────────────
-    const $ = sel => panel.querySelector(sel);
-    const map   = $('#at-map'),  mov  = $('#at-map-ov');
-    const mctx  = map.getContext('2d');
-    const moctx = mov.getContext('2d');
-    const preview = $('#at-preview');
-    const pctx = preview.getContext('2d');
-
-    // Init render-mode/cols/rows fields
-    $('#at-filter').value = d.filterMode;
-    $('#at-cols').value = d.cols;
-    $('#at-rows').value = d.rows;
-    $('#at-tw').value   = d.tileW;
-    $('#at-th').value   = d.tileH;
-
-    // ── Close ────────────────────────────────────────────────
-    $('#at-close').addEventListener('click', () => {
-        rebuildAutoTileSprites(obj);
-        _buildHelper(obj);
-        import('./engine.ui.js').then(m => { m.syncPixiToInspector(); m.refreshHierarchy(); });
-        panel.remove();
-        window.removeEventListener('keydown', _onKey);
-    });
-
-    // ── Brush selector ───────────────────────────────────────
-    const brushSel = $('#at-brush-select');
-    function _populateBrushes() {
-        brushSel.innerHTML = '<option value="">— Select brush —</option>';
-        for (const b of state.tilesetBrushes) {
-            const o = document.createElement('option');
-            o.value = b.id; o.textContent = b.name;
-            if (b.id === activeBrushId) o.selected = true;
-            brushSel.appendChild(o);
-        }
-        _renderBrushForm();
-    }
-    brushSel.addEventListener('change', () => {
-        activeBrushId = brushSel.value || null;
-        _renderBrushForm();
-    });
-
-    $('#at-brush-new').addEventListener('click', () => {
-        const name = prompt('Brush name:', 'TileBrush' + (state.tilesetBrushes.length + 1));
-        if (!name) return;
-        const id = 'brush_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
-        state.tilesetBrushes.push({
-            id, name, type: '16-tile',
-            tileW: d.tileW, tileH: d.tileH,
-            tiles: new Array(SLOTS).fill(null),
-        });
-        activeBrushId = id;
-        _populateBrushes();
-    });
-
-    $('#at-brush-delete').addEventListener('click', () => {
-        const brush = _getBrush(); if (!brush) return;
-        if (!confirm(`Delete brush "${brush.name}"? This will erase its cells from this map.`)) return;
-        const idx = d.brushList.indexOf(brush.id);
-        if (idx >= 0) {
-            for (let i = 0; i < d.cells.length; i++) {
-                if (d.cells[i] === idx) d.cells[i] = -1;
-                else if (d.cells[i] > idx) d.cells[i]--;
-            }
-            d.brushList.splice(idx, 1);
-        }
-        state.tilesetBrushes = state.tilesetBrushes.filter(b => b.id !== brush.id);
-        activeBrushId = state.tilesetBrushes[0]?.id || null;
-        _populateBrushes();
-        _drawMap();
-    });
-
-    function _getBrush() {
-        return state.tilesetBrushes.find(b => b.id === activeBrushId) || null;
-    }
-
-    // Pre-load images for a brush
-    function _brushImgs(brush) {
-        let imgs = imgCache.get(brush.id);
-        if (!imgs || imgs.length !== SLOTS) { imgs = new Array(SLOTS).fill(null); imgCache.set(brush.id, imgs); }
-        for (let i = 0; i < SLOTS; i++) {
-            const url = brush.tiles[i];
-            if (!url) { imgs[i] = null; continue; }
-            if (!imgs[i] || imgs[i].dataset.src !== url) {
-                const im = new Image();
-                im.dataset.src = url;
-                im.onload = () => { _drawMap(); _drawPreview(); };
-                im.src = url;
-                imgs[i] = im;
-            }
-        }
-        return imgs;
-    }
-
-    // ── Brush form (right column of left panel) ──────────────
-    function _renderBrushForm() {
-        const brush = _getBrush();
-        $('#at-brush-form').style.display  = brush ? 'block' : 'none';
-        $('#at-brush-empty').style.display = brush ? 'none'  : 'block';
-        if (!brush) { _drawPreview(); return; }
-
-        $('#at-brush-name').value = brush.name;
-        $('#at-brush-type').value = brush.type || '16-tile';
-
-        // Build tile thumbnails grid (16 slots flowing 6 per row)
-        const grid = $('#at-tiles-grid');
-        grid.innerHTML = '';
-        for (let i = 0; i < SLOTS; i++) {
-            const cell = document.createElement('div');
-            cell.className = 'at-thumb' + (brush.tiles[i] ? '' : ' empty');
-            cell.dataset.slot = i;
-            const sharp = d.filterMode === 'pixelated' ? 'pixelated' : '';
-            cell.innerHTML = brush.tiles[i]
-                ? `<img class="${sharp}" src="${brush.tiles[i]}"/>`
-                : `<span class="at-empty">—</span>`;
-            const m = document.createElement('span');
-            m.className = 'at-mask-num';
-            m.textContent = i;
-            cell.appendChild(m);
-            cell.title = `Slot ${i}: N=${i&1?1:0} E=${i&2?1:0} S=${i&4?1:0} W=${i&8?1:0}`;
-            grid.appendChild(cell);
-
-            cell.addEventListener('click', () => _uploadOne(brush, i));
-        }
-        _brushImgs(brush);
-        _drawPreview();
-    }
-
-    $('#at-brush-name').addEventListener('change', e => {
-        const b = _getBrush(); if (!b) return;
-        b.name = e.target.value || b.name;
-        _populateBrushes();
-    });
-
-    function _uploadOne(brush, slotIdx) {
-        const inp = document.createElement('input');
-        inp.type = 'file'; inp.accept = 'image/*';
-        inp.onchange = e => {
-            const f = e.target.files[0]; if (!f) return;
-            const fr = new FileReader();
-            fr.onload = ev => {
-                brush.tiles[slotIdx] = ev.target.result;
-                imgCache.delete(brush.id);
-                _renderBrushForm();
-                _drawMap();
-            };
-            fr.readAsDataURL(f);
-        };
-        inp.click();
-    }
-
-    // ── UPLOAD IMAGES (multi) ───────────────────────────────
-    $('#at-upload-many').addEventListener('click', () => {
-        const brush = _getBrush(); if (!brush) return;
-        const inp = document.createElement('input');
-        inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
-        inp.onchange = async e => {
-            const files = Array.from(e.target.files || [])
-                .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-            const max = Math.min(files.length, SLOTS);
-            for (let i = 0; i < max; i++) {
-                brush.tiles[i] = await new Promise(res => {
-                    const fr = new FileReader();
-                    fr.onload = ev => res(ev.target.result);
-                    fr.readAsDataURL(files[i]);
-                });
-            }
-            imgCache.delete(brush.id);
-            _renderBrushForm();
-            _drawMap();
-        };
-        inp.click();
-    });
-
-    // ── UPLOAD BRUSH IMAGE (single 4×4 sheet) ────────────────
-    $('#at-upload-sheet').addEventListener('click', () => {
-        const brush = _getBrush(); if (!brush) return;
-        const inp = document.createElement('input');
-        inp.type = 'file'; inp.accept = 'image/*';
-        inp.onchange = e => {
-            const f = e.target.files[0]; if (!f) return;
-            const fr = new FileReader();
-            fr.onload = ev => {
-                const img = new Image();
-                img.onload = () => {
-                    const sw = Math.floor(img.width / 4);
-                    const sh = Math.floor(img.height / 4);
-                    for (let i = 0; i < SLOTS; i++) {
-                        const sc = i % 4, sr = Math.floor(i / 4);
-                        const cv = document.createElement('canvas');
-                        cv.width = sw; cv.height = sh;
-                        const cx = cv.getContext('2d');
-                        cx.imageSmoothingEnabled = d.filterMode !== 'pixelated';
-                        cx.drawImage(img, sc * sw, sr * sh, sw, sh, 0, 0, sw, sh);
-                        brush.tiles[i] = cv.toDataURL('image/png');
-                    }
-                    brush.tileW = sw; brush.tileH = sh;
-                    imgCache.delete(brush.id);
-                    _renderBrushForm();
-                    _drawMap();
-                };
-                img.src = ev.target.result;
-            };
-            fr.readAsDataURL(f);
-        };
-        inp.click();
-    });
-
-    // ── Toggle preview tile guides ───────────────────────────
-    $('#at-toggle-guides').addEventListener('click', () => {
-        guidesOn = !guidesOn;
-        $('#at-guides-label').textContent = guidesOn ? 'Tile guides ON' : 'Tile guides OFF';
-        _drawPreview();
-    });
-
-    // ── Download preview ─────────────────────────────────────
-    $('#at-download-preview').addEventListener('click', () => {
-        const url = preview.toDataURL('image/png');
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = (_getBrush()?.name || 'brush') + '_preview.png';
-        a.click();
-    });
-
-    // ── Brush preview canvas ─────────────────────────────────
-    function _drawPreview() {
-        const brush = _getBrush();
-        // Use a small demo blob shape that exercises many neighbor configs
-        const cells = [
-            [0,1,1,1,0],
-            [1,1,1,1,1],
-            [1,1,1,1,1],
-            [0,1,1,0,0],
-        ];
-        const rows = cells.length, cols = cells[0].length;
-        const tw = (brush?.tileW) || d.tileW;
-        const th = (brush?.tileH) || d.tileH;
-        // Display target ~280px wide
-        const cssW = 280;
-        const scale = cssW / (cols * tw);
-        preview.width  = cols * tw;
-        preview.height = rows * th;
-        preview.style.width  = (cols * tw * scale) + 'px';
-        preview.style.height = (rows * th * scale) + 'px';
-        preview.style.imageRendering = (d.filterMode === 'pixelated') ? 'pixelated' : 'auto';
-        pctx.imageSmoothingEnabled = d.filterMode !== 'pixelated';
-
-        pctx.fillStyle = '#cfd4dd';
-        pctx.fillRect(0, 0, preview.width, preview.height);
-
-        if (brush) {
-            const imgs = _brushImgs(brush);
-            const isFilled = (c, r) => (cells[r] && cells[r][c]) ? 1 : 0;
-            for (let r = 0; r < rows; r++) {
-                for (let c = 0; c < cols; c++) {
-                    if (!isFilled(c, r)) continue;
-                    let m = 0;
-                    if (isFilled(c, r-1)) m |= 1;
-                    if (isFilled(c+1, r)) m |= 2;
-                    if (isFilled(c, r+1)) m |= 4;
-                    if (isFilled(c-1, r)) m |= 8;
-                    const slot = _resolveSlot(brush, m);
-                    if (slot < 0) continue;
-                    const im = imgs[slot];
-                    if (im && im.complete) pctx.drawImage(im, c * tw, r * th, tw, th);
-                }
-            }
-        }
-        if (guidesOn) {
-            pctx.strokeStyle = 'rgba(80,90,110,0.5)'; pctx.lineWidth = 1;
-            pctx.beginPath();
-            for (let c = 0; c <= cols; c++) { pctx.moveTo(c*tw, 0); pctx.lineTo(c*tw, preview.height); }
-            for (let r = 0; r <= rows; r++) { pctx.moveTo(0, r*th); pctx.lineTo(preview.width, r*th); }
-            pctx.stroke();
-        }
-    }
-
-    // ── Map painter ──────────────────────────────────────────
-    function _initMap() {
-        map.width  = d.cols * d.tileW;
-        map.height = d.rows * d.tileH;
-        mov.width  = map.width;
-        mov.height = map.height;
-        const sharp = d.filterMode === 'pixelated';
-        for (const cv of [map, mov]) cv.style.imageRendering = sharp ? 'pixelated' : 'auto';
-        for (const cx of [mctx, moctx]) { cx.imageSmoothingEnabled = !sharp; cx.imageSmoothingQuality = 'high'; }
-    }
-
-    function _drawMap() {
-        mctx.fillStyle = '#161a1f';
-        mctx.fillRect(0, 0, map.width, map.height);
-
-        for (let i = 0; i < d.cells.length; i++) {
-            const bIdx = d.cells[i];
-            if (bIdx < 0) continue;
-            const brushId = d.brushList[bIdx];
-            const brush = state.tilesetBrushes.find(b => b.id === brushId);
-            if (!brush) continue;
-            const col = i % d.cols, row = Math.floor(i / d.cols);
-            const slot = _resolveSlot(brush, _mask(d, col, row));
-            if (slot < 0) continue;
-            const imgs = _brushImgs(brush);
-            const im = imgs[slot];
-            if (im && im.complete) {
-                mctx.drawImage(im, col * d.tileW, row * d.tileH, d.tileW, d.tileH);
-            }
-        }
-
-        mctx.strokeStyle = 'rgba(74,222,128,0.18)'; mctx.lineWidth = 0.5;
-        mctx.beginPath();
-        for (let c = 0; c <= d.cols; c++) { mctx.moveTo(c*d.tileW, 0); mctx.lineTo(c*d.tileW, map.height); }
-        for (let r = 0; r <= d.rows; r++) { mctx.moveTo(0, r*d.tileH); mctx.lineTo(map.width, r*d.tileH); }
-        mctx.stroke();
-        mctx.strokeStyle = 'rgba(74,222,128,0.55)'; mctx.lineWidth = 2;
-        mctx.strokeRect(0, 0, map.width, map.height);
-    }
-
-    function _getCell(e) {
-        const rect = map.getBoundingClientRect();
-        const mx = (e.clientX - rect.left) * (map.width  / rect.width);
-        const my = (e.clientY - rect.top)  * (map.height / rect.height);
-        return { c: Math.floor(mx / d.tileW), r: Math.floor(my / d.tileH) };
-    }
-    function _validCell(c, r) { return c >= 0 && c < d.cols && r >= 0 && r < d.rows; }
-
-    function _ensureBrushIdx(brushId) {
-        let idx = d.brushList.indexOf(brushId);
-        if (idx < 0) { d.brushList.push(brushId); idx = d.brushList.length - 1; }
-        return idx;
-    }
-
-    function _paintCell(c, r) {
-        if (!_validCell(c, r)) return;
-        const i = r * d.cols + c;
-        if (tool === 'paint') {
-            if (!activeBrushId) return;
-            const idx = _ensureBrushIdx(activeBrushId);
-            if (d.cells[i] === idx) return;
-            d.cells[i] = idx;
-        } else if (tool === 'erase') {
-            if (d.cells[i] === -1) return;
-            d.cells[i] = -1;
-        }
-        _drawMap();
-    }
-
-    function _fill(c, r) {
-        if (!_validCell(c, r)) return;
-        const target = d.cells[r * d.cols + c];
-        const replaceIdx = tool === 'erase' ? -1
-            : (activeBrushId ? _ensureBrushIdx(activeBrushId) : -1);
-        if (target === replaceIdx) return;
-        const queue = [[c, r]];
-        const visited = new Uint8Array(d.cols * d.rows);
-        while (queue.length) {
-            const [cc, cr] = queue.shift();
-            if (!_validCell(cc, cr)) continue;
-            const idx = cr * d.cols + cc;
-            if (visited[idx] || d.cells[idx] !== target) continue;
-            visited[idx] = 1;
-            d.cells[idx] = replaceIdx;
-            queue.push([cc-1,cr],[cc+1,cr],[cc,cr-1],[cc,cr+1]);
-        }
-        _drawMap();
-    }
-
-    function _pushUndo() {
-        undoStack.push({ cells: new Int16Array(d.cells), brushList: d.brushList.slice() });
-        if (undoStack.length > 30) undoStack.shift();
-    }
-    function _undo() {
-        if (!undoStack.length) return;
-        const s = undoStack.pop();
-        d.cells = s.cells; d.brushList = s.brushList;
-        _drawMap();
-    }
-
-    map.addEventListener('mousedown', e => {
-        const { c, r } = _getCell(e);
-        if (!_validCell(c, r)) return;
-        _pushUndo();
-        if (tool === 'fill') { _fill(c, r); return; }
-        if (tool === 'pick') {
-            const idx = r * d.cols + c;
-            if (d.cells[idx] >= 0) {
-                activeBrushId = d.brushList[d.cells[idx]];
-                brushSel.value = activeBrushId || '';
-                _renderBrushForm();
-            }
-            setTool('paint'); return;
-        }
-        isPainting = true;
-        _paintCell(c, r);
-    });
-    window.addEventListener('mouseup', () => { isPainting = false; });
-    map.addEventListener('mousemove', e => {
-        const { c, r } = _getCell(e);
-        $('#at-cursor-info').textContent =
-            _validCell(c, r) ? `Col ${c+1}, Row ${r+1}  (brush ${d.cells[r*d.cols+c]})` : '';
-        moctx.clearRect(0, 0, map.width, map.height);
-        if (_validCell(c, r)) {
-            const brush = _getBrush();
-            if (tool === 'paint' && brush) {
-                const imgs = _brushImgs(brush);
-                const slot = _resolveSlot(brush, 0);
-                if (slot >= 0 && imgs[slot] && imgs[slot].complete) {
-                    moctx.globalAlpha = 0.55;
-                    moctx.drawImage(imgs[slot], c*d.tileW, r*d.tileH, d.tileW, d.tileH);
-                    moctx.globalAlpha = 1;
-                }
-            }
-            moctx.strokeStyle = '#facc15'; moctx.lineWidth = 2;
-            moctx.strokeRect(c*d.tileW+1, r*d.tileH+1, d.tileW-2, d.tileH-2);
-        }
-        if (isPainting && (tool === 'paint' || tool === 'erase')) _paintCell(c, r);
-    });
-    map.addEventListener('mouseleave', () => {
-        moctx.clearRect(0, 0, map.width, map.height);
-        $('#at-cursor-info').textContent = '';
-    });
-
-    function setTool(t) {
-        tool = t;
-        panel.querySelectorAll('.at-tool').forEach(b => b.classList.toggle('tool-active', b.dataset.tool === t));
-    }
-    panel.querySelectorAll('.at-tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
-
-    const _onKey = e => {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-        if (e.key === 'b' || e.key === 'B') setTool('paint');
-        if (e.key === 'e' || e.key === 'E') setTool('erase');
-        if (e.key === 'f' || e.key === 'F') setTool('fill');
-        if (e.key === 'i' || e.key === 'I') setTool('pick');
-        if ((e.ctrlKey||e.metaKey) && e.key === 'z') { e.preventDefault(); _undo(); }
-    };
-    window.addEventListener('keydown', _onKey);
-
-    // Apply settings (resize / render mode)
-    $('#at-apply').addEventListener('click', () => {
-        const nc = Math.max(1, parseInt($('#at-cols').value)||20);
-        const nr = Math.max(1, parseInt($('#at-rows').value)||15);
-        const tw = Math.max(4, parseInt($('#at-tw').value)||32);
-        const th = Math.max(4, parseInt($('#at-th').value)||32);
-        const fm = $('#at-filter').value;
-        const newCells = new Int16Array(nc * nr).fill(-1);
-        for (let r = 0; r < Math.min(nr, d.rows); r++) {
-            for (let c = 0; c < Math.min(nc, d.cols); c++) {
-                newCells[r*nc + c] = d.cells[r*d.cols + c];
-            }
-        }
-        d.cols = nc; d.rows = nr; d.tileW = tw; d.tileH = th;
-        d.cells = newCells; d.filterMode = fm;
-        _initMap(); _drawMap(); _renderBrushForm();
-    });
-
-    // Init
-    _initMap();
-    _drawMap();
-    _populateBrushes();
-}
-
-// ── Inspector HTML ───────────────────────────────────────────
 export function buildAutoTileInspectorHTML(obj) {
-    const d = obj.autoTileData; _migrate(d);
+    const d          = obj.autoTileData;
+    const filled     = d.cells ? Array.from(d.cells).filter(Boolean).length : 0;
+    const brushCount = (d.brushList || []).filter(Boolean).length;
+
     return `
     <div class="component-block" id="inspector-autotile-section">
       <div class="component-header">
-        <svg viewBox="0 0 24 24" class="comp-icon" style="color:#4ade80;">
+        <svg viewBox="0 0 24 24" class="comp-icon"
+             style="color:#4ade80;fill:none;stroke:currentColor;stroke-width:2;">
           <rect x="3" y="3" width="18" height="18" rx="2"/>
           <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
-          <circle cx="12" cy="12" r="2" fill="#4ade80"/>
+          <circle cx="12" cy="12" r="2" fill="#4ade80" stroke="none"/>
         </svg>
-        <span style="font-weight:600;color:#4ade80;">Auto Tilemap</span>
+        <span style="font-weight:600;color:#4ade80;">Auto-Tile</span>
       </div>
       <div class="component-body" style="display:flex;flex-direction:column;gap:5px;">
-        <div class="prop-row"><span class="prop-label">Size</span><span style="color:#9bc;">${d.cols} × ${d.rows} tiles</span></div>
-        <div class="prop-row"><span class="prop-label">Tile size</span><span style="color:#9bc;">${d.tileW} × ${d.tileH} px</span></div>
-        <div class="prop-row"><span class="prop-label">Render</span><span style="color:#9bc;">${d.filterMode}</span></div>
-        <div class="prop-row"><span class="prop-label">Brushes used</span><span style="color:#9bc;">${(d.brushList||[]).length}</span></div>
-        <button id="btn-open-autotile-editor" style="width:100%;background:#1a2a1a;border:1px solid #4ade80;color:#4ade80;
-                border-radius:4px;padding:6px;cursor:pointer;font-size:11px;margin-top:4px;
-                display:flex;align-items:center;justify-content:center;gap:6px;">
-          <svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;">
+        <div class="prop-row">
+          <span class="prop-label">Grid</span>
+          <span style="color:#9bc;">${d.cols} × ${d.rows} tiles</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Tile size</span>
+          <span style="color:#9bc;">${d.tileW} × ${d.tileH} px</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Brush slots</span>
+          <span style="color:#9bc;">${brushCount} / 16 filled</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Painted tiles</span>
+          <span style="color:#9bc;">${filled}</span>
+        </div>
+        <button id="btn-open-autotile-editor"
+          style="width:100%;background:#1a2a1a;border:1px solid #4ade80;color:#4ade80;
+                 border-radius:4px;padding:6px;cursor:pointer;font-size:11px;margin-top:4px;
+                 display:flex;align-items:center;justify-content:center;gap:6px;">
+          <svg viewBox="0 0 24 24"
+               style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;">
             <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
             <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
           </svg>
@@ -896,68 +301,570 @@ export function buildAutoTileInspectorHTML(obj) {
     </div>`;
 }
 
-// ── Snapshot / restore ───────────────────────────────────────
-export function snapshotAutoTilemap(obj) {
-    const d = obj.autoTileData; _migrate(d);
-    return {
-        isAutoTilemap: true,
-        label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
-        autoTileData: {
-            ...d,
-            cells: Array.from(d.cells),
-            brushList: d.brushList.slice(),
-        },
-    };
-}
-export async function restoreAutoTilemap(s) {
-    const obj = createAutoTilemap(s.x, s.y);
-    obj.label = s.label; obj.unityZ = s.unityZ || 0;
-    const td = s.autoTileData;
-    obj.autoTileData = {
-        ...td,
-        cells:     new Int16Array(td.cells || []),
-        brushList: Array.isArray(td.brushList) ? td.brushList.slice() : [],
-        filterMode: td.filterMode || 'smooth',
-    };
-    _migrate(obj.autoTileData);
-    _buildHelper(obj);
-    rebuildAutoTileSprites(obj);
-    return obj;
+// ─────────────────────────────────────────────────────────────
+// Public: open the full-screen editor modal
+// ─────────────────────────────────────────────────────────────
+
+export function openAutoTileEditor(obj) {
+    document.getElementById('autotile-editor-panel')?.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'autotile-editor-panel';
+    panel.style.cssText = [
+        'position:fixed;inset:0;z-index:9999;',
+        'display:flex;align-items:stretch;',
+        'background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);',
+    ].join('');
+
+    const d = obj.autoTileData;
+
+    panel.innerHTML = `
+<div style="display:flex;width:100%;height:100%;overflow:hidden;font-family:sans-serif;font-size:13px;">
+
+  <!-- ── LEFT: gallery + brush trainer ── -->
+  <div style="width:300px;min-width:240px;background:#12121e;
+              border-right:1px solid #1e1e38;display:flex;flex-direction:column;overflow:hidden;">
+
+    <div style="padding:12px 14px 10px;border-bottom:1px solid #1e1e38;
+                display:flex;align-items:center;justify-content:space-between;">
+      <span style="color:#4ade80;font-weight:700;">Brush Trainer</span>
+      <div style="display:flex;gap:6px;">
+        <button id="at-upload-pieces" style="${_btn('#3b82f6')}">Upload Tiles</button>
+        <button id="at-upload-sheet"  style="${_btn('#7c3aed')}">4×4 Sheet</button>
+      </div>
+    </div>
+
+    <div style="padding:10px 14px 0;">
+      <label style="color:#aaa;font-size:10px;font-weight:600;
+                    text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px;">
+        Brush Name
+      </label>
+      <input id="at-brush-name" type="text" value="Auto-Tile Brush"
+        style="width:100%;box-sizing:border-box;background:#0a0a18;
+               border:none;border-bottom:1px solid #4ade80;color:#e0e0e0;
+               padding:4px 0;outline:none;font-size:13px;"/>
+    </div>
+
+    <div style="flex:1;overflow-y:auto;padding:10px 14px;">
+      <div style="color:#888;font-size:10px;font-weight:600;text-transform:uppercase;
+                  letter-spacing:.06em;margin-bottom:8px;">Gallery</div>
+      <div id="at-gallery" style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;"></div>
+      <div id="at-gallery-empty" style="color:#444;font-size:11px;text-align:center;margin-top:16px;">
+        Upload tile images to begin.
+      </div>
+    </div>
+
+    <input id="at-file-pieces" type="file" multiple accept="image/*" style="display:none;">
+    <input id="at-file-sheet"  type="file" accept="image/*"          style="display:none;">
+  </div>
+
+  <!-- ── MIDDLE: 16-slot editor ── -->
+  <div style="width:320px;min-width:260px;background:#0d0d20;
+              border-right:1px solid #1e1e38;display:flex;flex-direction:column;
+              align-items:center;overflow-y:auto;padding:18px;">
+
+    <div style="color:#4ade80;font-weight:700;font-size:14px;
+                margin-bottom:12px;align-self:flex-start;">Tile Slot Editor</div>
+
+    <!-- Mode toggle -->
+    <div style="display:flex;gap:6px;margin-bottom:12px;align-self:flex-start;">
+      <button id="at-mode-drag"  style="${_toolBtn(true)}">✦ Drag &amp; Drop</button>
+      <button id="at-mode-erase" style="${_toolBtn(false)}">✕ Eraser</button>
+    </div>
+
+    <!-- 4-row slot grid -->
+    <div id="at-slot-grid" style="display:flex;flex-direction:column;gap:6px;"></div>
+
+    <button id="at-guide-toggle"
+      style="margin-top:12px;${_btn('#444')}font-size:10px;align-self:flex-start;">
+      Guides: ON
+    </button>
+
+    <div style="width:100%;margin-top:16px;display:flex;flex-direction:column;gap:6px;">
+      <button id="at-go-draw"
+        style="width:100%;${_btn('#4ade80')}color:#0a1a0a;font-weight:700;padding:9px;">
+        ✓ Save &amp; Draw Map
+      </button>
+      <button id="at-autocomplete" style="width:100%;${_btn('#7c3aed')}">
+        ⬆ Auto-Complete from 4×4 Sheet
+      </button>
+    </div>
+  </div>
+
+  <!-- ── RIGHT: map painter ── -->
+  <div style="flex:1;background:#080814;display:flex;flex-direction:column;overflow:hidden;">
+
+    <!-- Toolbar -->
+    <div style="padding:9px 14px;border-bottom:1px solid #1e1e38;
+                display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <span style="color:#4ade80;font-weight:700;">Map Painter</span>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <label style="color:#777;font-size:11px;">
+          Cols <input id="at-cols" type="number" value="${d.cols}" min="5" max="80"
+            style="width:42px;${_numInput()}">
+        </label>
+        <label style="color:#777;font-size:11px;">
+          Rows <input id="at-rows" type="number" value="${d.rows}" min="5" max="60"
+            style="width:42px;${_numInput()}">
+        </label>
+        <label style="color:#777;font-size:11px;">
+          Tile <input id="at-tileW" type="number" value="${d.tileW}" min="8" max="128"
+            style="width:42px;${_numInput()}">px
+        </label>
+        <button id="at-apply-size" style="${_btn('#3b82f6')}">Apply</button>
+        <button id="at-clear-map"  style="${_btn('#ef4444')}">Clear</button>
+        <button id="at-close"      style="${_btn('#555')}">✕ Close</button>
+      </div>
+    </div>
+
+    <!-- Canvas area -->
+    <div style="flex:1;overflow:auto;display:flex;
+                justify-content:flex-start;align-items:flex-start;padding:20px;">
+      <canvas id="at-map-canvas"
+        style="cursor:crosshair;image-rendering:pixelated;
+               box-shadow:0 0 0 1px #1e1e38,0 4px 20px #000a;"
+        oncontextmenu="return false;"></canvas>
+    </div>
+
+    <div style="padding:5px 14px;color:#444;font-size:10px;flex-shrink:0;">
+      Left-click: paint  •  Right-click: erase  •  Hold &amp; drag to paint continuously
+    </div>
+  </div>
+</div>`;
+
+    document.body.appendChild(panel);
+    _wireEditor(panel, obj);
 }
 
-// ── Helpers ──────────────────────────────────────────────────
-function _uniqueName(base) {
-    const existing = new Set(state.gameObjects.map(o => o.label));
-    if (!existing.has(base)) return base;
-    let i = 2; while (existing.has(`${base} (${i})`)) i++;
-    return `${base} (${i})`;
+// ─────────────────────────────────────────────────────────────
+// Editor wiring (all interactivity)
+// ─────────────────────────────────────────────────────────────
+
+/** 4×4 sheet column-major index → slot id (matching original brush file) */
+const SHEET_TO_SLOT = [0, 1, 2, 9, 3, 4, 5, 10, 6, 7, 8, 11, 12, 13, 14, 15];
+
+/** Visual slot layout: 4 rows × 4 cols */
+const SLOT_LAYOUT = [
+    [0,  1,  2,  9],
+    [3,  4,  5, 10],
+    [6,  7,  8, 11],
+    [12, 13, 14, 15],
+];
+
+function _wireEditor(panel, obj) {
+    const d = obj.autoTileData;
+
+    // Working copies (only committed on Save/Close)
+    let slots      = d.brushList.slice();
+    let gallery    = slots.filter(Boolean).slice();
+    let dragSrc    = null;
+    let editorMode = 'drag';
+    let guidesOn   = true;
+
+    // Map state
+    let mapCols = d.cols, mapRows = d.rows;
+    let tileW   = d.tileW, tileH  = d.tileH;
+    let cells   = d.cells ? new Uint8Array(d.cells) : new Uint8Array(mapCols * mapRows);
+    let slotImgs = new Array(16).fill(null); // HTMLImageElements for canvas rendering
+
+    // Canvas
+    const mapCanvas = panel.querySelector('#at-map-canvas');
+    const mapCtx    = mapCanvas.getContext('2d');
+    let isDrawing = false, drawAction = 1;
+
+    function resizeCanvas() {
+        mapCanvas.width  = mapCols * tileW;
+        mapCanvas.height = mapRows * tileH;
+    }
+    resizeCanvas();
+
+    // ── canvas bitmask ──
+    function bitmask(col, row) {
+        let m = 0;
+        if (row > 0          && cells[(row - 1) * mapCols + col])        m += 1;
+        if (col < mapCols-1  && cells[row       * mapCols + (col + 1)])  m += 2;
+        if (row < mapRows-1  && cells[(row + 1) * mapCols + col])        m += 4;
+        if (col > 0          && cells[row       * mapCols + (col - 1)])  m += 8;
+        return m;
+    }
+
+    // ── full map redraw ──
+    function renderMap() {
+        mapCtx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
+        for (let r = 0; r < mapRows; r++) {
+            for (let c = 0; c < mapCols; c++) {
+                mapCtx.fillStyle = (r + c) % 2 === 0 ? '#0e0e1e' : '#0a0a18';
+                mapCtx.fillRect(c * tileW, r * tileH, tileW, tileH);
+                if (cells[r * mapCols + c]) {
+                    const m   = bitmask(c, r);
+                    const sid = BITMASK_TO_SLOT[m] ?? 15;
+                    if (slotImgs[sid]) {
+                        mapCtx.drawImage(slotImgs[sid], c * tileW, r * tileH, tileW, tileH);
+                    } else {
+                        mapCtx.fillStyle = 'rgba(74,222,128,0.3)';
+                        mapCtx.fillRect(c * tileW, r * tileH, tileW, tileH);
+                    }
+                }
+            }
+        }
+        if (guidesOn) {
+            mapCtx.strokeStyle = 'rgba(74,222,128,0.1)';
+            mapCtx.lineWidth   = 0.5;
+            for (let c = 0; c <= mapCols; c++) {
+                mapCtx.beginPath();
+                mapCtx.moveTo(c * tileW, 0);
+                mapCtx.lineTo(c * tileW, mapCanvas.height);
+                mapCtx.stroke();
+            }
+            for (let r = 0; r <= mapRows; r++) {
+                mapCtx.beginPath();
+                mapCtx.moveTo(0, r * tileH);
+                mapCtx.lineTo(mapCanvas.width, r * tileH);
+                mapCtx.stroke();
+            }
+        }
+    }
+
+    // ── load slot images then re-render ──
+    function loadSlotImages(cb) {
+        slotImgs = new Array(16).fill(null);
+        let pending = 0;
+        slots.forEach((url, i) => {
+            if (!url) return;
+            pending++;
+            const img = new Image();
+            img.onload  = () => { slotImgs[i] = img; pending--; if (!pending) { cb?.(); renderMap(); } };
+            img.onerror = () => {                     pending--; if (!pending) { cb?.(); renderMap(); } };
+            img.src = url;
+        });
+        if (!pending) { cb?.(); renderMap(); }
+    }
+
+    // ── single-cell paint ──
+    function paintCell(col, row, val) {
+        if (col < 0 || col >= mapCols || row < 0 || row >= mapRows) return;
+        const idx = row * mapCols + col;
+        if (cells[idx] === val) return;
+        cells[idx] = val;
+        // Re-render self + orthogonal neighbors (bitmask may have changed)
+        for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+                const r2 = row + dr, c2 = col + dc;
+                if (r2 < 0 || r2 >= mapRows || c2 < 0 || c2 >= mapCols) continue;
+                _renderCell(c2, r2);
+            }
+        }
+    }
+
+    function _renderCell(col, row) {
+        const x = col * tileW, y = row * tileH;
+        mapCtx.fillStyle = (row + col) % 2 === 0 ? '#0e0e1e' : '#0a0a18';
+        mapCtx.fillRect(x, y, tileW, tileH);
+        if (cells[row * mapCols + col]) {
+            const m   = bitmask(col, row);
+            const sid = BITMASK_TO_SLOT[m] ?? 15;
+            if (slotImgs[sid]) {
+                mapCtx.drawImage(slotImgs[sid], x, y, tileW, tileH);
+            } else {
+                mapCtx.fillStyle = 'rgba(74,222,128,0.3)';
+                mapCtx.fillRect(x, y, tileW, tileH);
+            }
+        }
+        if (guidesOn) {
+            mapCtx.strokeStyle = 'rgba(74,222,128,0.1)';
+            mapCtx.lineWidth   = 0.5;
+            mapCtx.strokeRect(x, y, tileW, tileH);
+        }
+    }
+
+    function getCell(e) {
+        const rect  = mapCanvas.getBoundingClientRect();
+        const scaleX = mapCanvas.width  / rect.width;
+        const scaleY = mapCanvas.height / rect.height;
+        return {
+            col: Math.floor(((e.clientX - rect.left) * scaleX) / tileW),
+            row: Math.floor(((e.clientY - rect.top)  * scaleY) / tileH),
+        };
+    }
+
+    mapCanvas.addEventListener('mousedown', e => {
+        isDrawing  = true;
+        drawAction = e.button === 2 ? 0 : 1;
+        const { col, row } = getCell(e);
+        paintCell(col, row, drawAction);
+    });
+    const _mapMove = e => {
+        if (!isDrawing) return;
+        const { col, row } = getCell(e);
+        paintCell(col, row, drawAction);
+    };
+    const _mapUp = () => { isDrawing = false; };
+    window.addEventListener('mousemove', _mapMove);
+    window.addEventListener('mouseup',   _mapUp);
+
+    // ── slot grid ──
+    const slotGrid = panel.querySelector('#at-slot-grid');
+
+    function buildSlotGrid() {
+        slotGrid.innerHTML = '';
+        SLOT_LAYOUT.forEach(rowIds => {
+            const rowEl = document.createElement('div');
+            rowEl.style.cssText = 'display:flex;gap:6px;';
+            rowIds.forEach(slotId => {
+                const cell = document.createElement('div');
+                cell.dataset.slot = slotId;
+                cell.style.cssText = [
+                    'width:58px;height:58px;',
+                    `background:#0e0e1e;border:1px solid ${guidesOn ? '#1e1e38' : 'transparent'};`,
+                    'border-radius:4px;position:relative;overflow:hidden;',
+                    'cursor:pointer;box-sizing:border-box;flex-shrink:0;',
+                ].join('');
+
+                if (slots[slotId]) {
+                    const img = document.createElement('img');
+                    img.src = slots[slotId];
+                    img.style.cssText = 'width:100%;height:100%;object-fit:fill;display:block;pointer-events:none;';
+                    cell.appendChild(img);
+
+                    if (editorMode === 'drag') {
+                        const clr = document.createElement('div');
+                        clr.style.cssText = [
+                            'display:none;position:absolute;top:0;right:0;',
+                            'background:#ef4444;color:#fff;padding:3px 4px;',
+                            'border-bottom-left-radius:3px;cursor:pointer;font-size:10px;line-height:1;',
+                        ].join('');
+                        clr.textContent = '✕';
+                        clr.addEventListener('click', ev => {
+                            ev.stopPropagation();
+                            slots[slotId] = null;
+                            slotImgs[slotId] = null;
+                            buildSlotGrid();
+                            renderMap();
+                        });
+                        cell.appendChild(clr);
+                        cell.addEventListener('mouseenter', () => { clr.style.display = 'block'; });
+                        cell.addEventListener('mouseleave', () => { clr.style.display = 'none'; });
+                    }
+                }
+
+                const lbl = document.createElement('div');
+                lbl.style.cssText = 'position:absolute;bottom:2px;left:3px;color:#333;font-size:8px;pointer-events:none;';
+                lbl.textContent = `S${slotId}`;
+                cell.appendChild(lbl);
+
+                cell.addEventListener('dragover', e => {
+                    if (editorMode !== 'drag') return;
+                    e.preventDefault();
+                    cell.style.boxShadow = 'inset 0 0 0 2px #3b82f6';
+                });
+                cell.addEventListener('dragleave', () => { cell.style.boxShadow = ''; });
+                cell.addEventListener('drop', e => {
+                    if (editorMode !== 'drag') return;
+                    e.preventDefault();
+                    cell.style.boxShadow = '';
+                    const src = dragSrc || e.dataTransfer.getData('text/plain');
+                    if (!src) return;
+                    slots[slotId] = src;
+                    const img = new Image();
+                    img.onload = () => { slotImgs[slotId] = img; renderMap(); };
+                    img.src = src;
+                    buildSlotGrid();
+                });
+
+                rowEl.appendChild(cell);
+            });
+            slotGrid.appendChild(rowEl);
+        });
+    }
+
+    buildSlotGrid();
+
+    // ── gallery ──
+    function addToGallery(dataURL) {
+        if (!gallery.includes(dataURL)) gallery.push(dataURL);
+        refreshGallery();
+    }
+
+    function refreshGallery() {
+        const el    = panel.querySelector('#at-gallery');
+        const empty = panel.querySelector('#at-gallery-empty');
+        el.innerHTML = '';
+        empty.style.display = gallery.length ? 'none' : '';
+        gallery.forEach(url => {
+            const item = document.createElement('div');
+            item.draggable   = true;
+            item.style.cssText = [
+                'aspect-ratio:1;background:#0a0a18;',
+                'border:1px solid #1e1e38;border-radius:3px;overflow:hidden;cursor:grab;',
+            ].join('');
+            const img = document.createElement('img');
+            img.src = url;
+            img.style.cssText = 'width:100%;height:100%;object-fit:cover;pointer-events:none;';
+            item.appendChild(img);
+            item.addEventListener('dragstart', e => {
+                dragSrc = url;
+                e.dataTransfer.setData('text/plain', url);
+                e.dataTransfer.effectAllowed = 'copy';
+            });
+            item.addEventListener('dragend', () => { dragSrc = null; });
+            el.appendChild(item);
+        });
+    }
+
+    // Pre-fill gallery from existing slots
+    slots.forEach(url => { if (url) addToGallery(url); });
+
+    // ── upload pieces ──
+    panel.querySelector('#at-upload-pieces').addEventListener('click', () => {
+        panel.querySelector('#at-file-pieces').click();
+    });
+    panel.querySelector('#at-file-pieces').addEventListener('change', e => {
+        Array.from(e.target.files).forEach(f => {
+            if (!f.type.startsWith('image/')) return;
+            const fr = new FileReader();
+            fr.onload = ev => addToGallery(ev.target.result);
+            fr.readAsDataURL(f);
+        });
+        e.target.value = '';
+    });
+
+    // ── upload 4×4 sheet ──
+    function loadSheet(file) {
+        const fr = new FileReader();
+        fr.onload = ev => {
+            const img = new Image();
+            img.onload = () => {
+                const slW = Math.floor(img.width  / 4);
+                const slH = Math.floor(img.height / 4);
+                const off = document.createElement('canvas');
+                off.width = slW; off.height = slH;
+                const ctx = off.getContext('2d');
+                SHEET_TO_SLOT.forEach((slotId, idx) => {
+                    const sx = (idx % 4) * slW;
+                    const sy = Math.floor(idx / 4) * slH;
+                    ctx.clearRect(0, 0, slW, slH);
+                    ctx.drawImage(img, sx, sy, slW, slH, 0, 0, slW, slH);
+                    const url = off.toDataURL('image/png');
+                    slots[slotId] = url;
+                    addToGallery(url);
+                });
+                buildSlotGrid();
+                loadSlotImages(() => renderMap());
+            };
+            img.src = ev.target.result;
+        };
+        fr.readAsDataURL(file);
+    }
+
+    panel.querySelector('#at-upload-sheet').addEventListener('click', () => {
+        panel.querySelector('#at-file-sheet').click();
+    });
+    panel.querySelector('#at-autocomplete').addEventListener('click', () => {
+        panel.querySelector('#at-file-sheet').click();
+    });
+    panel.querySelector('#at-file-sheet').addEventListener('change', e => {
+        const f = e.target.files[0];
+        if (f) loadSheet(f);
+        e.target.value = '';
+    });
+
+    // ── mode buttons ──
+    const modeDragBtn  = panel.querySelector('#at-mode-drag');
+    const modeEraseBtn = panel.querySelector('#at-mode-erase');
+
+    function setMode(m) {
+        editorMode = m;
+        modeDragBtn.style.cssText  = _toolBtn(m === 'drag');
+        modeEraseBtn.style.cssText = _toolBtn(m === 'erase');
+        buildSlotGrid();
+    }
+    modeDragBtn.addEventListener('click',  () => setMode('drag'));
+    modeEraseBtn.addEventListener('click', () => setMode('erase'));
+
+    // ── guide toggle ──
+    const guideBtn = panel.querySelector('#at-guide-toggle');
+    guideBtn.addEventListener('click', () => {
+        guidesOn = !guidesOn;
+        guideBtn.textContent = `Guides: ${guidesOn ? 'ON' : 'OFF'}`;
+        buildSlotGrid();
+        renderMap();
+    });
+
+    // ── resize ──
+    panel.querySelector('#at-apply-size').addEventListener('click', () => {
+        const newCols  = Math.max(5, Math.min(80,  parseInt(panel.querySelector('#at-cols').value)  || mapCols));
+        const newRows  = Math.max(5, Math.min(60,  parseInt(panel.querySelector('#at-rows').value)  || mapRows));
+        const newTileW = Math.max(8, Math.min(128, parseInt(panel.querySelector('#at-tileW').value) || tileW));
+
+        if (newCols !== mapCols || newRows !== mapRows) {
+            const newCells = new Uint8Array(newCols * newRows);
+            for (let r = 0; r < Math.min(mapRows, newRows); r++) {
+                for (let c = 0; c < Math.min(mapCols, newCols); c++) {
+                    newCells[r * newCols + c] = cells[r * mapCols + c];
+                }
+            }
+            cells   = newCells;
+            mapCols = newCols;
+            mapRows = newRows;
+        }
+        tileW = newTileW;
+        tileH = newTileW;
+        resizeCanvas();
+        renderMap();
+    });
+
+    // ── clear map ──
+    panel.querySelector('#at-clear-map').addEventListener('click', () => {
+        cells.fill(0);
+        renderMap();
+    });
+
+    // ── save & close ──
+    function save() {
+        window.removeEventListener('mousemove', _mapMove);
+        window.removeEventListener('mouseup',   _mapUp);
+        obj.autoTileData.brushList = slots.slice();
+        obj.autoTileData.cols      = mapCols;
+        obj.autoTileData.rows      = mapRows;
+        obj.autoTileData.tileW     = tileW;
+        obj.autoTileData.tileH     = tileH;
+        obj.autoTileData.cells     = new Uint8Array(cells);
+        _buildAutoTileHelper(obj);
+        rebuildAutoTileSprites(obj);
+        import('./engine.ui.js').then(m => m.refreshHierarchy());
+        import('./engine.history.js').then(({ pushUndo }) => pushUndo());
+        panel.remove();
+    }
+
+    panel.querySelector('#at-go-draw').addEventListener('click', save);
+    panel.querySelector('#at-close').addEventListener('click',   save);
+    panel.addEventListener('mousedown', e => { if (e.target === panel) save(); });
+
+    // ── initial render ──
+    loadSlotImages();
 }
-function _attachTranslateGizmo(container) {
-    const gizmoContainer = new PIXI.Container();
-    container.addChild(gizmoContainer);
-    container._gizmoContainer = gizmoContainer;
-    const g1 = _makeAxisLine(0xFF4F4B, 50, false);
-    const g2 = _makeAxisLine(0x8FC93A, 50, true);
-    const g3 = _makeSquare();
-    const grpT = new PIXI.Container(); grpT.addChild(g1, g2, g3);
-    const grpR = new PIXI.Container(); grpR.visible = false;
-    const grpS = new PIXI.Container(); grpS.visible = false;
-    container._grpTranslate = grpT; container._grpRotate = grpR; container._grpScale = grpS;
-    gizmoContainer.addChild(grpT, grpR, grpS);
-    container._gizmoHandles = { transX:g1, transY:g2, transCenter:g3, scaleX:g1, scaleY:g2, scaleCenter:g3, rotRing:g3 };
-    [g1, g2, g3].forEach(h => h.on('pointerdown', e => e.stopPropagation()));
+
+// ─────────────────────────────────────────────────────────────
+// Style micro-helpers
+// ─────────────────────────────────────────────────────────────
+
+function _btn(color) {
+    return `background:${color}22;border:1px solid ${color}66;color:${color};
+            border-radius:4px;padding:5px 10px;cursor:pointer;
+            font-size:11px;font-weight:600;letter-spacing:.03em;`;
 }
-function _makeAxisLine(color, len, isY) {
-    const g = new PIXI.Graphics();
-    g.beginFill(color); g.lineStyle(2, color);
-    if (isY) g.drawRect(-1,-len,2,len); else g.drawRect(0,-1,len,2);
-    g.lineStyle(0);
-    if (isY) { g.moveTo(-5,-len); g.lineTo(0,-len-9); g.lineTo(5,-len); }
-    else     { g.moveTo(len,-5);  g.lineTo(len+9,0);   g.lineTo(len,5); }
-    g.endFill(); g.eventMode='static'; return g;
+
+function _toolBtn(active) {
+    return active
+        ? `background:#162816;border:1px solid #4ade80;color:#4ade80;
+           border-radius:4px;padding:5px 12px;cursor:pointer;
+           font-size:11px;font-weight:700;`
+        : `background:#0a0a18;border:1px solid #1e1e38;color:#555;
+           border-radius:4px;padding:5px 12px;cursor:pointer;
+           font-size:11px;font-weight:600;`;
 }
-function _makeSquare() {
-    const g = new PIXI.Graphics();
-    g.beginFill(0xFFFFFF, 0.4); g.drawRect(-7,-7,14,14); g.endFill();
-    g.eventMode='static'; g.cursor='move'; return g;
+
+function _numInput() {
+    return `background:#0a0a18;border:1px solid #1e1e38;color:#e0e0e0;
+            border-radius:3px;padding:2px 4px;font-size:11px;`;
 }
