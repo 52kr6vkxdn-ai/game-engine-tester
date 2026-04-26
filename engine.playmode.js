@@ -356,6 +356,8 @@ function _snapshotScene() {
                 physicsBody: obj.physicsBody ?? 'none',
                 physicsFriction: obj.physicsFriction ?? 0.3,
                 physicsRestitution: obj.physicsRestitution ?? 0.1,
+                physicsShape: obj.physicsShape ?? 'box',
+                physicsPolygon: obj.physicsPolygon ? JSON.parse(JSON.stringify(obj.physicsPolygon)) : null,
             };
         }),
         camX: state.sceneContainer?.x ?? 0, camY: state.sceneContainer?.y ?? 0,
@@ -406,6 +408,8 @@ function _restoreScene(snap) {
                 obj.physicsBody        = s.physicsBody        ?? 'none';
                 obj.physicsFriction    = s.physicsFriction    ?? 0.3;
                 obj.physicsRestitution = s.physicsRestitution ?? 0.1;
+                obj.physicsShape       = s.physicsShape       ?? 'box';
+                obj.physicsPolygon     = s.physicsPolygon     ? JSON.parse(JSON.stringify(s.physicsPolygon)) : null;
                 if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
                 return obj;
             }
@@ -468,74 +472,77 @@ export function stopRuntimeAnimations() {
     }
 }
 
-/* ── Camera Culling ─────────────────────────────────────────── */
+/* ── Camera Culling + Scene Clipping ────────────────────────── */
 let _cullTicker = null;
+let _sceneMask  = null;  // single Graphics that clips the whole scene to game bounds
 
 function _startCulling() {
     _stopCulling();
+
+    // ONE mask on the sceneContainer — nothing outside the camera rect ever renders.
+    // This is the correct fix for the white-flash bug caused by per-object masks.
+    if (state.app && state.sceneContainer) {
+        _sceneMask = new PIXI.Graphics();
+        state.app.stage.addChild(_sceneMask);
+        state.sceneContainer.mask = _sceneMask;
+        _updateSceneMask();
+    }
+
     _cullTicker = () => {
         if (!state.isPlaying || !state.app || !state.sceneContainer) return;
-        const sc = state.sceneContainer;
-        const hw = GAME_WIDTH  / 2;
-        const hh = GAME_HEIGHT / 2;
-        // Camera edges in screen space
+        _updateSceneMask();
+
+        const sc  = state.sceneContainer;
+        const hw  = GAME_WIDTH  / 2;
+        const hh  = GAME_HEIGHT / 2;
         const camLeft   = sc.x - hw * sc.scale.x;
         const camRight  = sc.x + hw * sc.scale.x;
         const camTop    = sc.y - hh * sc.scale.y;
         const camBottom = sc.y + hh * sc.scale.y;
 
         for (const obj of state.gameObjects) {
-            if (obj.isLight || obj.isTilemap) continue; // handled separately
-            const bounds = obj.getBounds();
-            if (bounds.width < 1 || bounds.height < 1) continue;
-            // Fully outside → hide
-            if (bounds.right  < camLeft  || bounds.left   > camRight ||
-                bounds.bottom < camTop   || bounds.top    > camBottom) {
-                obj.visible = false;
-                if (obj._cullMask) { obj.mask = null; }
-            } else {
-                obj.visible = true;
-                // Partial clip → apply mask
-                const fullyInside = bounds.left >= camLeft && bounds.right  <= camRight &&
-                                    bounds.top  >= camTop  && bounds.bottom <= camBottom;
-                if (!fullyInside) {
-                    _applyBoundsMask(obj, sc, camLeft, camTop, camRight, camBottom);
-                } else if (obj._cullMask) {
-                    obj.mask = null;
-                }
-            }
+            try {
+                const bounds = obj.getBounds();
+                if (!bounds || bounds.width < 0.5 || bounds.height < 0.5) continue;
+                const outside = bounds.right  < camLeft  || bounds.left   > camRight ||
+                                bounds.bottom < camTop   || bounds.top    > camBottom;
+                obj.visible    = !outside;
+                obj._wasCulled = outside;
+            } catch (_) {}
         }
     };
     state.app.ticker.add(_cullTicker);
 }
 
-function _stopCulling() {
-    if (_cullTicker && state.app) {
-        try { state.app.ticker.remove(_cullTicker); } catch(_) {}
-        _cullTicker = null;
-    }
-    for (const obj of state.gameObjects) {
-        if (obj._cullMask) {
-            obj.mask = null;
-            try { obj._cullMask.destroy(); } catch(_) {}
-            obj._cullMask = null;
-        }
-    }
+function _updateSceneMask() {
+    if (!_sceneMask || !state.sceneContainer) return;
+    const sc = state.sceneContainer;
+    const x  = sc.x - (GAME_WIDTH  / 2) * sc.scale.x;
+    const y  = sc.y - (GAME_HEIGHT / 2) * sc.scale.y;
+    const w  = GAME_WIDTH  * sc.scale.x;
+    const h  = GAME_HEIGHT * sc.scale.y;
+    _sceneMask.clear();
+    _sceneMask.beginFill(0xFFFFFF, 1);
+    _sceneMask.drawRect(x, y, w, h);
+    _sceneMask.endFill();
 }
 
-function _applyBoundsMask(obj, sc, camLeft, camTop, camRight, camBottom) {
-    const tl = sc.toLocal({ x: camLeft,  y: camTop    });
-    const br = sc.toLocal({ x: camRight, y: camBottom  });
-    if (!obj._cullMask) {
-        obj._cullMask = new PIXI.Graphics();
-        sc.addChildAt(obj._cullMask, 0);
+function _stopCulling() {
+    if (_cullTicker && state.app) {
+        try { state.app.ticker.remove(_cullTicker); } catch (_) {}
+        _cullTicker = null;
     }
-    const m = obj._cullMask;
-    m.clear();
-    m.beginFill(0xFFFFFF, 1);
-    m.drawRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
-    m.endFill();
-    obj.mask = m;
+    // Remove scene mask
+    if (_sceneMask) {
+        if (state.sceneContainer) state.sceneContainer.mask = null;
+        try { state.app?.stage?.removeChild(_sceneMask); _sceneMask.destroy(); } catch (_) {}
+        _sceneMask = null;
+    }
+    // Restore visibility
+    for (const obj of state.gameObjects) {
+        obj.visible    = true;
+        obj._wasCulled = false;
+    }
 }
 
 function _playObjectIdleAnim(obj) {
