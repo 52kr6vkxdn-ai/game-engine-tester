@@ -121,6 +121,9 @@ function _saveCurrentScene() {
             tint: obj.spriteGraphic?.tint ?? 0xFFFFFF,
             animations: obj.animations ? JSON.parse(JSON.stringify(obj.animations)) : [],
             activeAnimIndex: obj.activeAnimIndex || 0,
+            physicsBody: obj.physicsBody ?? 'none',
+            physicsFriction: obj.physicsFriction ?? 0.3,
+            physicsRestitution: obj.physicsRestitution ?? 0.1,
         };
     });
 
@@ -187,6 +190,9 @@ function _loadScene(index) {
                 obj.rotation = s.rotation; obj.unityZ = s.unityZ; obj.prefabId = s.prefabId || null;
                 if (obj.spriteGraphic?.tint !== undefined) obj.spriteGraphic.tint = s.tint;
                 if (s.animations?.length) { obj.animations = JSON.parse(JSON.stringify(s.animations)); obj.activeAnimIndex = s.activeAnimIndex || 0; }
+                obj.physicsBody        = s.physicsBody        ?? 'none';
+                obj.physicsFriction    = s.physicsFriction    ?? 0.3;
+                obj.physicsRestitution = s.physicsRestitution ?? 0.1;
                 if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
             });
         });

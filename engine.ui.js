@@ -120,7 +120,13 @@ export function syncPixiToInspector() {
     if (spriteSection) spriteSection.style.display = '';
     if (animSection)   animSection.style.display   = '';
     const lightMount = document.getElementById('light-inspector-mount');
-    if (lightMount) lightMount.innerHTML = '';
+    if (lightMount) {
+        // Inject physics inspector at bottom of lightMount
+        import('./engine.physics.js').then(m => {
+            lightMount.innerHTML = m.buildPhysicsInspectorHTML(go);
+            m.bindPhysicsInspector(go);
+        });
+    }
 
     let deg = (go.rotation * 180 / Math.PI) % 360;
     if (deg < 0) deg += 360;

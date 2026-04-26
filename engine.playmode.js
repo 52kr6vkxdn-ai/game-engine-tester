@@ -18,6 +18,8 @@ export function enterPlayMode() {
     _startFPSCounter();
     // Start animating all objects
     import('./engine.playmode.js').then(m => m.startRuntimeAnimations());
+    // Start physics simulation
+    import('./engine.physics.js').then(m => m.startPhysics());
     _logConsole('▶ Play Mode — Space or ■ to stop', '#4ade80');
 }
 
@@ -45,6 +47,8 @@ export function stopPlayMode() {
     _removePlayOverlay();
     // Stop all runtime animations before restoring scene
     stopRuntimeAnimations();
+    // Stop physics
+    import('./engine.physics.js').then(m => m.stopPhysics());
     _blockEditorInput(false);    // restore input
     _showEditorUI();
     // Store snapshot ref now — _restoreScene will clear state._playSnapshot
@@ -349,6 +353,9 @@ function _snapshotScene() {
                 tint: obj.spriteGraphic?.tint ?? 0xFFFFFF,
                 animations: obj.animations ? JSON.parse(JSON.stringify(obj.animations)) : [],
                 activeAnimIndex: obj.activeAnimIndex || 0,
+                physicsBody: obj.physicsBody ?? 'none',
+                physicsFriction: obj.physicsFriction ?? 0.3,
+                physicsRestitution: obj.physicsRestitution ?? 0.1,
             };
         }),
         camX: state.sceneContainer?.x ?? 0, camY: state.sceneContainer?.y ?? 0,
@@ -395,6 +402,10 @@ function _restoreScene(snap) {
                 obj.rotation = s.rotation; obj.unityZ = s.unityZ; obj.prefabId = s.prefabId || null;
                 if (obj.spriteGraphic?.tint !== undefined) obj.spriteGraphic.tint = s.tint;
                 if (s.animations?.length) { obj.animations = JSON.parse(JSON.stringify(s.animations)); obj.activeAnimIndex = s.activeAnimIndex || 0; }
+                // Restore physics props
+                obj.physicsBody        = s.physicsBody        ?? 'none';
+                obj.physicsFriction    = s.physicsFriction    ?? 0.3;
+                obj.physicsRestitution = s.physicsRestitution ?? 0.1;
                 if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
                 return obj;
             }
