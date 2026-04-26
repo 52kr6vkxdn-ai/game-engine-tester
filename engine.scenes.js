@@ -105,7 +105,12 @@ function _saveCurrentScene() {
             const td = obj.autoTileData;
             return {
                 isAutoTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
-                autoTileData: { ...td, cells: Array.from(td.cells), brushList: td.brushList.slice() },
+                autoTileData: {
+                    ...td,
+                    cells: Array.from(td.cells),
+                    brushList: td.brushList.slice(),
+                    activeBrushIds: (td.activeBrushIds || []).slice(),
+                },
             };
         }
         return {

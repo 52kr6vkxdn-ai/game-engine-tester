@@ -238,6 +238,7 @@ function _hideAllGizmosAndGrid() {
         if (obj._gizmoContainer) obj._gizmoContainer.visible = false;
         if (obj.isLight && obj._lightHelper) obj._lightHelper.visible = false;
         if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = false;
+        if (obj.isAutoTilemap && obj._autoTileHelper) obj._autoTileHelper.visible = false;
     });
     if (state.gridGraphics) state.gridGraphics.visible = false;
     if (state.spriteBox)    state.spriteBox.visible    = false;
@@ -329,6 +330,18 @@ function _snapshotScene() {
                     tilemapData: { ...obj.tilemapData, tiles: Array.from(obj.tilemapData.tiles) },
                 };
             }
+            if (obj.isAutoTilemap) {
+                const td = obj.autoTileData;
+                return {
+                    isAutoTilemap: true, label: obj.label, x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                    autoTileData: {
+                        ...td,
+                        cells: Array.from(td.cells),
+                        brushList: td.brushList.slice(),
+                        activeBrushIds: (td.activeBrushIds || []).slice(),
+                    },
+                };
+            }
             return {
                 label: obj.label, isImage: obj.isImage, assetId: obj.assetId,
                 prefabId: obj.prefabId || null, x: obj.x, y: obj.y,
@@ -368,6 +381,9 @@ function _restoreScene(snap) {
         }
         if (s.isTilemap) {
             return import('./engine.tilemap.js').then(({ restoreTilemap }) => restoreTilemap(s));
+        }
+        if (s.isAutoTilemap) {
+            return import('./engine.autotile.js').then(({ restoreAutoTilemap }) => restoreAutoTilemap(s));
         }
         return import('./engine.objects.js').then(({ createImageObject, selectObject }) => {
             if (s.isImage && s.assetId) {
@@ -416,6 +432,13 @@ export function startRuntimeAnimations() {
             import('./engine.tilemap.js').then(m => m.rebuildTilemapSprites(obj));
             continue;
         }
+        if (obj.isAutoTilemap) {
+            obj.visible = true;
+            // Helper (wireframe grid) must be hidden in play mode
+            if (obj._autoTileHelper) obj._autoTileHelper.visible = false;
+            import('./engine.autotile.js').then(m => m.rebuildAutoTileSprites(obj));
+            continue;
+        }
         obj.visible = true;
         _playObjectIdleAnim(obj);
     }
@@ -427,9 +450,10 @@ export function stopRuntimeAnimations() {
     for (const obj of state.gameObjects) {
         _stopObjectAnim(obj);
         obj.visible = true;
-        // Restore light helpers
+        // Restore editor helpers
         if (obj.isLight && obj._lightHelper) obj._lightHelper.visible = true;
         if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = true;
+        if (obj.isAutoTilemap && obj._autoTileHelper) obj._autoTileHelper.visible = true;
     }
 }
 
