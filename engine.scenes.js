@@ -126,6 +126,7 @@ function _saveCurrentScene() {
             physicsRestitution: obj.physicsRestitution ?? 0.1,
             physicsShape: obj.physicsShape ?? 'box',
             physicsPolygon: obj.physicsPolygon ? JSON.parse(JSON.stringify(obj.physicsPolygon)) : null,
+            physicsPolygons: obj.physicsPolygons ? JSON.parse(JSON.stringify(obj.physicsPolygons)) : null,
         };
     });
 
@@ -196,7 +197,8 @@ function _loadScene(index) {
                 obj.physicsFriction    = s.physicsFriction    ?? 0.3;
                 obj.physicsRestitution = s.physicsRestitution ?? 0.1;
                 obj.physicsShape       = s.physicsShape       ?? 'box';
-                obj.physicsPolygon     = s.physicsPolygon     ? JSON.parse(JSON.stringify(s.physicsPolygon)) : null;
+                obj.physicsPolygon     = s.physicsPolygon  ? JSON.parse(JSON.stringify(s.physicsPolygon))  : null;
+                obj.physicsPolygons    = s.physicsPolygons ? JSON.parse(JSON.stringify(s.physicsPolygons)) : null;
                 if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
             });
         });

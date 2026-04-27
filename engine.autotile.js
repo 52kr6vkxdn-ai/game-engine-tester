@@ -635,26 +635,34 @@ function _wireEditor(panel, obj) {
     // ── Paint / erase a cell ──
     function paintCell(col, row) {
         if (col < 0 || col >= mapCols || row < 0 || row >= mapRows) return;
-        const idx    = row * mapCols + col;
-        let changed  = false;
+        const idx   = row * mapCols + col;
+        let changed = false;
 
         if (mapMode === 'eraseAll') {
             if (_cellFilled(cells, idx)) { cells[idx] = []; changed = true; }
         } else if (mapMode === 'erase') {
-            // Erase only the currently selected brush layer
             const bid = paintBrushId || activeBrushId || null;
             if (bid) changed = _removeLayer(cells, idx, bid);
             else     { if (_cellFilled(cells, idx)) { cells[idx] = []; changed = true; } }
         } else {
-            // Paint: add the selected brush as a new layer
+            // Paint: REPLACE the brush at this cell.
+            // If the cell already has this exact brush, skip (no change).
+            // If the cell has a DIFFERENT brush, replace it with the new one.
+            // This means each cell holds exactly ONE brush at a time — switching
+            // brush and painting overwrites the previous brush on that cell.
             const bid = paintBrushId || activeBrushId;
-            if (!bid) return; // nothing selected
-            changed = _addLayer(cells, idx, bid);
+            if (!bid) return;
+            const current = cells[idx];
+            const alreadyThis = Array.isArray(current) && current.length === 1 && current[0] === bid;
+            if (!alreadyThis) {
+                cells[idx] = [bid];   // replace — always exactly one brush per cell
+                changed = true;
+            }
         }
 
         if (!changed) return;
 
-        // Re-render this cell and its neighbors (bitmask changed)
+        // Re-render self + neighbors (bitmask may change)
         for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
             const r2 = row + dr, c2 = col + dc;
             if (r2 >= 0 && r2 < mapRows && c2 >= 0 && c2 < mapCols)
