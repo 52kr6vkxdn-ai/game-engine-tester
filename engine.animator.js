@@ -298,6 +298,29 @@ function _buildHTML(obj) {
                                    border-radius:3px;padding:2px 7px;cursor:pointer;font-size:9px;">👁 Show</button>
                 </div>
 
+                <!-- Body type row -->
+                <div style="display:flex;align-items:center;gap:5px;margin-top:2px;">
+                    <span style="color:#888;font-size:9px;min-width:50px;">Body</span>
+                    <select id="anim-col-body-type"
+                            style="flex:1;background:#111;border:1px solid #333;color:#e0e0e0;border-radius:3px;padding:2px 5px;font-size:10px;cursor:pointer;">
+                        <option value="none">None</option>
+                        <option value="static">Static</option>
+                        <option value="dynamic">Dynamic</option>
+                        <option value="kinematic">Kinematic</option>
+                    </select>
+                </div>
+
+                <!-- Shape type row -->
+                <div style="display:flex;align-items:center;gap:5px;">
+                    <span style="color:#888;font-size:9px;min-width:50px;">Shape</span>
+                    <select id="anim-col-shape-type"
+                            style="flex:1;background:#111;border:1px solid #333;color:#e0e0e0;border-radius:3px;padding:2px 5px;font-size:10px;cursor:pointer;">
+                        <option value="box">▭ Box</option>
+                        <option value="circle">◯ Circle</option>
+                        <option value="polygon">⬡ Polygon</option>
+                    </select>
+                </div>
+
                 <div id="anim-col-frame-info"
                      style="background:#1a1400;border:1px solid #facc1533;border-radius:3px;
                             padding:5px 7px;font-size:9px;color:#888;line-height:1.5;">
@@ -474,6 +497,30 @@ function _wire(modal, obj) {
     });
 
     // ── Collision section ────────────────────────────────────
+    // Initialise selects to current object values
+    const bodyTypeEl  = modal.querySelector('#anim-col-body-type');
+    const shapeTypeEl = modal.querySelector('#anim-col-shape-type');
+    if (bodyTypeEl)  bodyTypeEl.value  = obj.physicsBody  ?? 'none';
+    if (shapeTypeEl) shapeTypeEl.value = obj.physicsShape ?? 'box';
+
+    bodyTypeEl?.addEventListener('change', () => {
+        obj.physicsBody = bodyTypeEl.value;
+        // Auto-generate default collision shape on first enable
+        if (bodyTypeEl.value !== 'none' && !obj._collisionShapeInit) {
+            import('./engine.physics.js').then(m => m.autoFitCollisionShape(obj));
+            obj._collisionShapeInit = true;
+        }
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+        _dirty = true;
+    });
+
+    shapeTypeEl?.addEventListener('change', () => {
+        obj.physicsShape = shapeTypeEl.value;
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+        _dirty = true;
+        // Refresh current frame preview to show new shape
+        _showFrame(modal, obj, currentFrame);
+    });
     const _updateColFrameInfo = () => {
         const anim  = _currentAnim(obj);
         const frame = anim?.frames?.[currentFrame];

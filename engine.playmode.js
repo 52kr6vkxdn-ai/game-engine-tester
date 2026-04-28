@@ -20,6 +20,8 @@ export function enterPlayMode() {
     import('./engine.playmode.js').then(m => m.startRuntimeAnimations());
     // Start physics simulation
     import('./engine.physics.js').then(m => m.startPhysics());
+    // Hide collision overlay in play mode
+    import('./engine.collision-overlay.js').then(m => m.onPlayModeEnter());
     _logConsole('▶ Play Mode — Space or ■ to stop', '#4ade80');
 }
 
@@ -49,6 +51,8 @@ export function stopPlayMode() {
     stopRuntimeAnimations();
     // Stop physics
     import('./engine.physics.js').then(m => m.stopPhysics());
+    // Restore collision overlay after play mode
+    import('./engine.collision-overlay.js').then(m => m.onPlayModeExit());
     _blockEditorInput(false);    // restore input
     _showEditorUI();
     // Store snapshot ref now — _restoreScene will clear state._playSnapshot
