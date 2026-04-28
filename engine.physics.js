@@ -339,6 +339,9 @@ export function buildPhysicsInspectorHTML(obj) {
             <button id="phys-edit-polygon" style="${_btn('#7c3aed')}width:100%;">
               ✏ Edit Collision Shape
             </button>
+            <button id="phys-autofit" style="${_btn('#06b6d4')}width:100%;margin-top:2px;">
+              🎯 Auto-fit from Sprite
+            </button>
             <div style="color:#666;font-size:9px;text-align:center;">${sharedSummary}</div>
             ${frameTabsHTML}
           </div>
@@ -355,6 +358,9 @@ export function buildPhysicsInspectorHTML(obj) {
           <div style="background:#1a1400;border:1px solid #facc1533;border-radius:3px;padding:4px 6px;font-size:9px;color:#facc1566;">
             Physics active in play mode ▶
           </div>
+          <button id="phys-show-collision" style="${_btn('#facc15')}width:100%;margin-top:2px;font-size:10px;">
+            👁 Show Collision Shape
+          </button>
         </div>
       </div>
     </div>`;
@@ -374,8 +380,104 @@ function _polySummary(poly) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Bind inspector events
+// Auto-fit: generate a tight collision shape from sprite alpha
 // ─────────────────────────────────────────────────────────────
+
+export function autoFitCollisionShape(obj) {
+    _autoFitCollisionShape(obj);
+}
+
+function _autoFitCollisionShape(obj) {
+    // Try alpha-based hull from sprite frames, fall back to box
+    const dataURL = obj.animations?.[obj.activeAnimIndex ?? 0]?.frames?.[0]?.dataURL
+                 || obj.spriteGraphic?.texture?.baseTexture?.resource?.source?.src
+                 || null;
+
+    if (dataURL) {
+        _alphaHullFromDataURL(dataURL, obj);
+    } else {
+        // Fallback: tight box from sprite size
+        const raw = _rawSize(obj);
+        if (!obj.physicsPolygons) obj.physicsPolygons = {};
+        obj.physicsPolygons.shared = _defaultBox(raw.w, raw.h);
+        obj.physicsShape = 'polygon';
+        if (!obj.physicsPolygon) obj.physicsPolygon = obj.physicsPolygons.shared.slice();
+    }
+}
+
+function _alphaHullFromDataURL(dataURL, obj) {
+    const img = new Image();
+    img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width  = img.naturalWidth  || 64;
+        canvas.height = img.naturalHeight || 64;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        try {
+            const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const hull   = _computeAlphaOBB(pixels, canvas.width, canvas.height);
+            if (hull && hull.length >= 3) {
+                if (!obj.physicsPolygons) obj.physicsPolygons = {};
+                obj.physicsPolygons.shared = hull;
+                obj.physicsShape  = 'polygon';
+                obj.physicsPolygon = hull.slice();
+                import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+                return;
+            }
+        } catch(_) {}
+
+        // Fallback to tight box
+        const raw = _rawSize(obj);
+        if (!obj.physicsPolygons) obj.physicsPolygons = {};
+        obj.physicsPolygons.shared = _defaultBox(raw.w, raw.h);
+        obj.physicsShape = 'polygon';
+        obj.physicsPolygon = obj.physicsPolygons.shared.slice();
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+    };
+    img.src = dataURL;
+}
+
+// Compute an axis-aligned bounding box from non-transparent pixels,
+// returned as centred polygon vertices (like _defaultBox).
+function _computeAlphaOBB(imageData, w, h) {
+    const data = imageData.data;
+    const THRESHOLD = 20; // alpha threshold
+    let minX = w, maxX = 0, minY = h, maxY = 0;
+    let found = false;
+
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const a = data[(y * w + x) * 4 + 3];
+            if (a > THRESHOLD) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+                found = true;
+            }
+        }
+    }
+
+    if (!found) return null;
+
+    // Add 1px padding
+    minX = Math.max(0, minX - 1);
+    minY = Math.max(0, minY - 1);
+    maxX = Math.min(w - 1, maxX + 1);
+    maxY = Math.min(h - 1, maxY + 1);
+
+    // Convert to centred coordinates
+    const cx = w / 2, cy = h / 2;
+    return [
+        { x: minX - cx, y: minY - cy },
+        { x: maxX - cx, y: minY - cy },
+        { x: maxX - cx, y: maxY - cy },
+        { x: minX - cx, y: maxY - cy },
+    ];
+}
+
+
 
 export function bindPhysicsInspector(obj) {
     const typeEl  = document.getElementById('phys-type');
@@ -390,17 +492,37 @@ export function bindPhysicsInspector(obj) {
     typeEl.addEventListener('change', () => {
         obj.physicsBody = typeEl.value;
         if (extra) extra.style.display = typeEl.value === 'none' ? 'none' : 'flex';
+        // Auto-generate default collision shape on first enable
+        if (typeEl.value !== 'none' && !obj._collisionShapeInit) {
+            _autoFitCollisionShape(obj);
+            obj._collisionShapeInit = true;
+        }
         _pushUndo();
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
     });
 
     shapeEl?.addEventListener('change', () => {
         obj.physicsShape = shapeEl.value;
         if (polyRow) polyRow.style.display = shapeEl.value === 'polygon' ? 'flex' : 'none';
         _pushUndo();
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
     });
 
     // "Edit" button — opens shared polygon editor
     editBtn?.addEventListener('click', () => openPolygonEditor(obj, 'shared'));
+
+    // "Auto-fit" button
+    document.getElementById('phys-autofit')?.addEventListener('click', () => {
+        _autoFitCollisionShape(obj);
+        _pushUndo();
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+        // Show toast
+        const toast = document.createElement('div');
+        toast.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:#0a2a1a;border:1px solid #4ade80;color:#4ade80;border-radius:4px;padding:6px 18px;font-size:11px;z-index:99999;pointer-events:none;';
+        toast.textContent = '🎯 Collision shape auto-fitted';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 2000);
+    });
 
     // Per-frame buttons
     document.querySelectorAll('.pe-frame-btn').forEach(btn => {
@@ -417,6 +539,18 @@ export function bindPhysicsInspector(obj) {
     bnceEl?.addEventListener('change', () => {
         obj.physicsRestitution = Math.max(0, Math.min(1, parseFloat(bnceEl.value) || 0));
         _pushUndo();
+    });
+
+    // "Show Collision" button — toggles the global overlay
+    document.getElementById('phys-show-collision')?.addEventListener('click', () => {
+        import('./engine.collision-overlay.js').then(m => {
+            m.setCollisionVisible(!state.showCollision);
+            const btn = document.getElementById('phys-show-collision');
+            if (btn) {
+                btn.textContent = state.showCollision ? '👁 Hide Collision Shape' : '👁 Show Collision Shape';
+                btn.style.background = state.showCollision ? '#facc1533' : '';
+            }
+        });
     });
 }
 
@@ -704,6 +838,7 @@ export function openPolygonEditor(obj, frameId = 'shared') {
             if (frameId === 'shared') obj.physicsPolygon = obj.physicsPolygons.shared.slice();
         }
         import('./engine.ui.js').then(m => m.syncPixiToInspector?.());
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
         _pushUndo();
         panel.remove();
     }

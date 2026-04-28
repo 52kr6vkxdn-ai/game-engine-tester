@@ -20,6 +20,44 @@
 
 import { state } from './engine.state.js';
 
+// ── Auto-fit collision shape from a specific dataURL ─────────
+function _autoFitFromDataURL(obj, dataURL, frameId, onDone) {
+    const img = new Image();
+    img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || 64;
+        canvas.height = img.naturalHeight || 64;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const w = canvas.width, h = canvas.height;
+        let minX = w, maxX = 0, minY = h, maxY = 0, found = false;
+        try {
+            const data = ctx.getImageData(0, 0, w, h).data;
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                if (data[(y * w + x) * 4 + 3] > 20) {
+                    if (x < minX) minX = x; if (x > maxX) maxX = x;
+                    if (y < minY) minY = y; if (y > maxY) maxY = y;
+                    found = true;
+                }
+            }
+        } catch(_) {}
+        const cx = w / 2, cy = h / 2;
+        const hull = found ? [
+            { x: minX - cx, y: minY - cy }, { x: maxX - cx, y: minY - cy },
+            { x: maxX - cx, y: maxY - cy }, { x: minX - cx, y: maxY - cy },
+        ] : [
+            { x: -cx, y: -cy }, { x: cx, y: -cy },
+            { x: cx, y: cy },  { x: -cx, y: cy },
+        ];
+        if (!obj.physicsPolygons) obj.physicsPolygons = {};
+        obj.physicsPolygons[frameId] = hull;
+        if (frameId === 'shared') obj.physicsPolygon = hull.slice();
+        obj.physicsShape = 'polygon';
+        onDone?.();
+    };
+    img.src = dataURL;
+}
+
 // ── Public: open the editor for an object ────────────────────
 export function openAnimationEditor(obj) {
     if (!obj) return;
@@ -250,6 +288,44 @@ function _buildHTML(obj) {
                                border-radius:3px; padding:6px; cursor:pointer; font-size:11px; width:100%;">
                     🗑 Delete Animation
                 </button>
+
+                <!-- ── Collision Shape Section ──────────── -->
+                <div style="border-top:1px solid #333; margin-top:4px;"></div>
+                <div style="display:flex; align-items:center; justify-content:space-between;">
+                    <span style="color:#facc15; font-size:10px; font-weight:bold; letter-spacing:1px;">⬡ COLLISION</span>
+                    <button id="anim-col-toggle-vis" title="Toggle collision overlay (C)"
+                            style="background:#facc1522;border:1px solid #facc1544;color:#facc15;
+                                   border-radius:3px;padding:2px 7px;cursor:pointer;font-size:9px;">👁 Show</button>
+                </div>
+
+                <div id="anim-col-frame-info"
+                     style="background:#1a1400;border:1px solid #facc1533;border-radius:3px;
+                            padding:5px 7px;font-size:9px;color:#888;line-height:1.5;">
+                    Select a frame below to edit its shape.
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:4px;">
+                    <button id="anim-col-edit-frame"
+                            style="background:#7c3aed22;border:1px solid #7c3aed66;color:#a78bfa;
+                                   border-radius:3px;padding:5px 8px;cursor:pointer;font-size:10px;width:100%;">
+                        ✏ Edit This Frame's Shape
+                    </button>
+                    <button id="anim-col-edit-shared"
+                            style="background:#1e1a30;border:1px solid #3a3060;color:#7c6aaa;
+                                   border-radius:3px;padding:5px 8px;cursor:pointer;font-size:10px;width:100%;">
+                        ✏ Edit Shared Shape
+                    </button>
+                    <button id="anim-col-autofit"
+                            style="background:#06b6d422;border:1px solid #06b6d444;color:#67e8f9;
+                                   border-radius:3px;padding:5px 8px;cursor:pointer;font-size:10px;width:100%;">
+                        🎯 Auto-fit from Frame
+                    </button>
+                    <button id="anim-col-copy-all"
+                            style="background:#1a1e1a;border:1px solid #3a4a3a;color:#6a9a6a;
+                                   border-radius:3px;padding:4px 8px;cursor:pointer;font-size:9px;width:100%;">
+                        📋 Copy Shape to All Frames
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -389,6 +465,97 @@ function _wire(modal, obj) {
         _applyAnimToObject(obj);
         _dirty = true;
         _showToast(modal, 'Animation applied ✔');
+    });
+
+    modal.querySelector('#anim-apply-btn').addEventListener('click', () => {
+        _applyAnimToObject(obj);
+        _dirty = true;
+        _showToast(modal, 'Animation applied ✔');
+    });
+
+    // ── Collision section ────────────────────────────────────
+    const _updateColFrameInfo = () => {
+        const anim  = _currentAnim(obj);
+        const frame = anim?.frames?.[currentFrame];
+        const info  = modal.querySelector('#anim-col-frame-info');
+        if (!info) return;
+        if (!frame) {
+            info.textContent = 'No frame selected.';
+            info.style.color = '#555';
+            return;
+        }
+        const polyMap = obj.physicsPolygons || {};
+        const hasFr   = Array.isArray(polyMap[frame.id]) && polyMap[frame.id].length >= 3;
+        const hasSh   = Array.isArray(polyMap.shared)    && polyMap.shared.length >= 3;
+        info.innerHTML = `
+            <span style="color:#ccc;">Frame:</span> <span style="color:#a78bfa;">${frame.name}</span><br>
+            <span style="color:#${hasFr ? '4ade80' : '555'};">● Per-frame shape: ${hasFr ? 'defined' : 'none'}</span><br>
+            <span style="color:#${hasSh ? '4ade80' : '555'};">● Shared shape: ${hasSh ? 'defined' : 'none'}</span>
+        `;
+    };
+
+    // Override _selectFrame to also update collision info
+    const _origSelectFrame = modal._selectFrame;
+    modal._selectFrame = (idx) => {
+        _origSelectFrame?.(idx);
+        currentFrame = idx;
+        _updateColFrameInfo();
+    };
+
+    _updateColFrameInfo();
+
+    modal.querySelector('#anim-col-toggle-vis')?.addEventListener('click', () => {
+        import('./engine.collision-overlay.js').then(m => {
+            m.setCollisionVisible(!state.showCollision);
+            const btn = modal.querySelector('#anim-col-toggle-vis');
+            if (btn) btn.textContent = state.showCollision ? '👁 Hide' : '👁 Show';
+        });
+    });
+
+    modal.querySelector('#anim-col-edit-frame')?.addEventListener('click', () => {
+        const anim  = _currentAnim(obj);
+        const frame = anim?.frames?.[currentFrame];
+        if (!frame) { _showToast(modal, '⚠ Select a frame first'); return; }
+        import('./engine.physics.js').then(m => m.openPolygonEditor(obj, frame.id));
+        _dirty = true;
+    });
+
+    modal.querySelector('#anim-col-edit-shared')?.addEventListener('click', () => {
+        import('./engine.physics.js').then(m => m.openPolygonEditor(obj, 'shared'));
+        _dirty = true;
+    });
+
+    modal.querySelector('#anim-col-autofit')?.addEventListener('click', () => {
+        const anim  = _currentAnim(obj);
+        const frame = anim?.frames?.[currentFrame];
+        if (!frame) { _showToast(modal, '⚠ Select a frame first'); return; }
+        // Auto-fit from this specific frame's dataURL
+        _autoFitFromDataURL(obj, frame.dataURL, frame.id, () => {
+            _updateColFrameInfo();
+            _showToast(modal, '🎯 Shape auto-fitted from frame');
+            import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+        });
+        _dirty = true;
+    });
+
+    modal.querySelector('#anim-col-copy-all')?.addEventListener('click', () => {
+        const anim  = _currentAnim(obj);
+        const frame = anim?.frames?.[currentFrame];
+        const polyMap = obj.physicsPolygons || {};
+        const src   = (frame && polyMap[frame.id]?.length >= 3) ? polyMap[frame.id]
+                    : polyMap.shared?.length >= 3 ? polyMap.shared
+                    : null;
+        if (!src) { _showToast(modal, '⚠ No shape on this frame to copy'); return; }
+        if (!obj.physicsPolygons) obj.physicsPolygons = {};
+        obj.physicsPolygons.shared = src.map(p => ({ ...p }));
+        const allAnims = obj.animations || [];
+        allAnims.forEach(a => (a.frames || []).forEach(f => {
+            obj.physicsPolygons[f.id] = src.map(p => ({ ...p }));
+        }));
+        _updateColFrameInfo();
+        _showToast(modal, '📋 Shape copied to all frames');
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+        _dirty = true;
     });
 
     // ── Playback ────────────────────────────────────────────
@@ -629,6 +796,9 @@ function _showFrame(modal, obj, idx) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
+        // Draw collision shape overlay on preview canvas
+        _drawCollisionOnCanvas(ctx, obj, frame, canvas.width, canvas.height);
+
         // Update stats
         modal.querySelector('#anim-stat-res').textContent = `${img.naturalWidth}×${img.naturalHeight}`;
     };
@@ -790,6 +960,94 @@ async function _ensureJSZip() {
         s.onerror = reject;
         document.head.appendChild(s);
     });
+}
+
+// ── Draw collision shape overlay on 2D canvas ─────────────────
+// Used in the animation editor preview to show collision per frame
+function _drawCollisionOnCanvas(ctx, obj, frame, cvW, cvH) {
+    if (!obj || !frame) return;
+
+    // Get polygon for this specific frame, fallback to shared
+    const polyMap = obj.physicsPolygons || {};
+    let poly = null;
+    if (frame.id && Array.isArray(polyMap[frame.id]) && polyMap[frame.id].length >= 3) {
+        poly = polyMap[frame.id];
+    } else if (Array.isArray(polyMap.shared) && polyMap.shared.length >= 3) {
+        poly = polyMap.shared;
+    } else if (Array.isArray(obj.physicsPolygon) && obj.physicsPolygon.length >= 3) {
+        poly = obj.physicsPolygon;
+    }
+
+    const shape  = obj.physicsShape ?? 'box';
+    const cx     = cvW / 2;
+    const cy     = cvH / 2;
+
+    // Determine colour by body type
+    const typeColours = {
+        static:    '#4ade80',
+        dynamic:   '#60a5fa',
+        kinematic: '#facc15',
+    };
+    const col = typeColours[obj.physicsBody] || '#a78bfa';
+
+    ctx.save();
+
+    if (shape === 'circle') {
+        const r = Math.min(cvW, cvH) / 2 - 1;
+        ctx.strokeStyle = col;
+        ctx.lineWidth   = 1.5;
+        ctx.globalAlpha = 0.75;
+        ctx.fillStyle   = col + '28';
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+    } else if (shape === 'polygon' && poly) {
+        // Polygon vertices are in local-pixel coords centred at origin.
+        // Map to canvas coords.
+        ctx.strokeStyle = col;
+        ctx.lineWidth   = 1.5;
+        ctx.globalAlpha = 0.75;
+        ctx.fillStyle   = col + '28';
+        ctx.beginPath();
+        poly.forEach((p, i) => {
+            const px = cx + p.x;
+            const py = cy + p.y;
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        // Vertex dots
+        ctx.fillStyle = col;
+        ctx.globalAlpha = 0.9;
+        poly.forEach(p => {
+            ctx.beginPath();
+            ctx.arc(cx + p.x, cy + p.y, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    } else {
+        // Default box — use raw sprite size (canvas size)
+        ctx.strokeStyle = col;
+        ctx.lineWidth   = 1.5;
+        ctx.globalAlpha = 0.65;
+        ctx.fillStyle   = col + '1a';
+        const pad = 1;
+        ctx.fillRect(pad, pad, cvW - pad * 2, cvH - pad * 2);
+        ctx.strokeRect(pad, pad, cvW - pad * 2, cvH - pad * 2);
+    }
+
+    // Label what source the shape is from
+    if (obj.physicsBody && obj.physicsBody !== 'none') {
+        const isFrameSpecific = frame.id && Array.isArray(polyMap[frame.id]) && polyMap[frame.id].length >= 3;
+        const label = isFrameSpecific ? '⬡ frame' : (polyMap.shared?.length >= 3 ? '⬡ shared' : '⬡ default box');
+        ctx.globalAlpha = 0.7;
+        ctx.fillStyle   = col;
+        ctx.font        = 'bold 8px monospace';
+        ctx.fillText(label, 3, cvH - 4);
+    }
+
+    ctx.restore();
 }
 
 function _blobToDataURL(blob) {

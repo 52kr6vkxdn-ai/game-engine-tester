@@ -23,6 +23,7 @@ import { saveProject, loadProject, newProject } from './engine.project.js';
 import { createLight, LIGHT_TYPES, initLighting } from './engine.lights.js';
 import { createTilemap } from './engine.tilemap.js';
 import { createAutoTilemap } from './engine.autotile.js';
+import { initCollisionOverlay, setCollisionVisible, refreshCollisionOverlay } from './engine.collision-overlay.js';
 
 export function startEngine() {
     if (typeof PIXI === 'undefined') {
@@ -79,6 +80,9 @@ export function startEngine() {
     initResizePanels();
     initGlobalShortcuts();
 
+    // Init collision overlay layer (must be after PIXI app is ready)
+    setTimeout(() => initCollisionOverlay(), 100);
+
     // Draw camera bounds overlay after a short delay (renderer must be ready)
     setTimeout(() => drawCameraBounds(), 300);
 }
@@ -110,6 +114,11 @@ function initMenus() {
     document.getElementById('btn-undo')?.addEventListener('click', undo);
     document.getElementById('btn-redo')?.addEventListener('click', redo);
     updateUndoButtons();
+
+    // ── Collision overlay toggle ──────────────────────────
+    document.getElementById('btn-collision-toggle')?.addEventListener('click', () => {
+        setCollisionVisible(!state.showCollision);
+    });
 
     // ── File menu ─────────────────────────────────────────
     const fileBtn = document.getElementById('menu-file');
@@ -541,6 +550,13 @@ function initGlobalShortcuts() {
         if (e.code === 'KeyP' && state.isPlaying && !inInput) {
             e.preventDefault();
             pausePlayMode();
+            return;
+        }
+
+        // C = toggle collision overlay (not in input, not ctrl)
+        if (e.code === 'KeyC' && !inInput && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            setCollisionVisible(!state.showCollision);
             return;
         }
 

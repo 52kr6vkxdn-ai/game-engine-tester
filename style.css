@@ -129,6 +129,7 @@ body, html {
 .tool-btn:hover { background: var(--bg-hover); color: var(--text); }
 .tool-btn.active { background: var(--bg-active); color: var(--accent-bright); }
 .tool-btn:disabled { opacity: 0.3; cursor: default; }
+#btn-collision-toggle.active { background: #facc1522; color: #facc15; border-color: #facc1566; }
 
 /* Play buttons */
 .play-btn {

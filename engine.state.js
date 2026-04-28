@@ -93,4 +93,8 @@ export const state = {
     isPaused:   false,
     /** snapshot taken when play was pressed, to restore on stop */
     _playSnapshot: null,
+
+    // ── Collision overlay visibility ──────────────────────
+    /** Whether collision shapes are drawn in the editor viewport */
+    showCollision: false,
 };
