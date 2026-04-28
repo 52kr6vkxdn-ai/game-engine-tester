@@ -32,12 +32,7 @@ export function initCollisionOverlay() {
 
     // Redraw every frame so it tracks object movement
     _ticker = () => {
-        // Never show collision shapes in play mode
-        if (state.isPlaying) {
-            if (_layer.visible) { _layer.visible = false; _layer.clear(); }
-            return;
-        }
-        if (_visible) _redrawAll();
+        if (_visible && !state.isPlaying) _redrawAll();
     };
     state.app.ticker.add(_ticker);
 }
@@ -49,10 +44,8 @@ export function setCollisionVisible(v) {
     _visible = v;
     state.showCollision = v;
     if (_layer) {
-        // Never show in play mode
-        const shouldShow = v && !state.isPlaying;
-        _layer.visible = shouldShow;
-        if (shouldShow) _redrawAll();
+        _layer.visible = v;
+        if (v) _redrawAll();
         else   _layer.clear();
     }
     // Update toolbar badge
@@ -63,20 +56,7 @@ export function setCollisionVisible(v) {
 }
 
 export function refreshCollisionOverlay() {
-    if (_visible && _layer && !state.isPlaying) _redrawAll();
-}
-
-// Called when play mode starts — force-hide overlay
-export function onPlayModeEnter() {
-    if (_layer) { _layer.visible = false; _layer.clear(); }
-}
-
-// Called when play mode stops — restore overlay if it was visible
-export function onPlayModeExit() {
-    if (_layer && _visible) {
-        _layer.visible = true;
-        _redrawAll();
-    }
+    if (_visible && _layer) _redrawAll();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -115,8 +95,7 @@ function _drawObjectCollision(obj, sc) {
     const sx    = Math.abs(obj.scale?.x ?? 1) || 1;
     const sy    = Math.abs(obj.scale?.y ?? 1) || 1;
 
-    // Compute raw (unscaled) pixel size from the sprite/frame dataURL dimensions
-    // so it matches exactly what was seen in the polygon editor
+    // Compute raw (unscaled) pixel size
     const raw = _rawSize(obj);
     const w   = raw.w * sx;
     const h   = raw.h * sy;
@@ -124,9 +103,8 @@ function _drawObjectCollision(obj, sc) {
     // World position (with scene container transform applied)
     const wx  = sc.x + obj.x * sc.scale.x;
     const wy  = sc.y + obj.y * sc.scale.y;
-    // Per-axis scene zoom (for scaling shape verts into screen space)
-    const scx = sc.scale.x;
-    const scy = sc.scale.y;
+    const wsx = sx   * sc.scale.x;
+    const wsy = sy   * sc.scale.y;
     const rot = obj.rotation ?? 0;
 
     // Colour by body type
@@ -136,16 +114,14 @@ function _drawObjectCollision(obj, sc) {
     _layer.beginFill(col, 0.10);
 
     if (shape === 'circle') {
-        const r = Math.max(Math.min(w, h) / 2, 2) * scx;
+        const r = Math.max(Math.min(w, h) / 2, 2) * sc.scale.x;
         _drawRotatedCircle(wx, wy, r, rot);
     } else if ((shape === 'polygon') && _hasPolygon(obj)) {
         const poly = _getPolygon(obj);
-        // Verts are in raw-pixel local space (centred at origin).
-        // Apply object scale then scene zoom independently.
-        _drawPolygon(wx, wy, poly, sx * scx, sy * scy, rot);
+        _drawPolygon(wx, wy, poly, wsx, wsy, rot);
     } else {
-        // Box (default) — sized by raw sprite dimensions × object scale × scene zoom
-        _drawRotatedRect(wx, wy, raw.w * sx * scx, raw.h * sy * scy, rot);
+        // Box (default)
+        _drawRotatedRect(wx, wy, w * sc.scale.x, h * sc.scale.y, rot);
     }
 
     _layer.endFill();
@@ -264,22 +240,6 @@ function _bodyColor(type) {
 }
 
 function _rawSize(obj) {
-    // Priority 1: active animation frame dataURL natural size (matches polygon editor)
-    const anim  = obj.animations?.[obj.activeAnimIndex ?? 0];
-    const frame = anim?.frames?.[0];
-    if (frame?.dataURL) {
-        // Use cached frame size if available
-        if (frame._w && frame._h) return { w: frame._w, h: frame._h };
-        // Try to read from an already-loaded image in the DOM (best effort sync)
-        const imgs = document.querySelectorAll('img[src]');
-        for (const img of imgs) {
-            if (img.src === frame.dataURL && img.naturalWidth > 0) {
-                frame._w = img.naturalWidth; frame._h = img.naturalHeight;
-                return { w: frame._w, h: frame._h };
-            }
-        }
-    }
-    // Priority 2: texture original size
     const src = obj.spriteGraphic || obj._runtimeSprite;
     if (src?.texture?.orig) return { w: src.texture.orig.width,  h: src.texture.orig.height };
     if (src?.texture?.width) return { w: src.texture.width,       h: src.texture.height };

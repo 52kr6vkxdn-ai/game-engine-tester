@@ -281,14 +281,31 @@ export function buildPhysicsInspectorHTML(obj) {
     const shape  = obj.physicsShape      ?? 'box';
 
     const OPT  = (v, l) => `<option value="${v}" ${type  === v ? 'selected' : ''}>${l}</option>`;
+    const SOPT = (v, l) => `<option value="${v}" ${shape === v ? 'selected' : ''}>${l}</option>`;
 
-    // Collision shape summary for display only
+    // Frame list for the per-frame polygon tabs
+    const anims  = obj.animations || [];
+    const frames = anims.flatMap(a => (a.frames || []).map(f => ({ id: f.id, name: f.name || f.id })));
     const polyMap = obj.physicsPolygons || {};
-    const hasShape = (shape === 'polygon') && (
-        Array.isArray(polyMap.shared) && polyMap.shared.length >= 3
-    );
-    const shapeLabel = shape === 'circle' ? '◯ Circle' : shape === 'polygon' ? (hasShape ? '⬡ Polygon ✓' : '⬡ Polygon (edit in Animation)') : '▭ Box';
-    const shapeColor = shape === 'polygon' && !hasShape ? '#666' : '#a78bfa';
+
+    const frameTabsHTML = frames.length > 0
+        ? `<div style="margin-top:4px;">
+            <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;">Per-frame shapes</div>
+            <div style="display:flex;flex-wrap:wrap;gap:3px;">
+              <button class="pe-frame-btn" data-frame="shared"
+                style="${_frameBtn(!frames.some(f => (polyMap[f.id]?.length >= 3)), 'shared')}">
+                All frames
+              </button>
+              ${frames.map(f => `
+              <button class="pe-frame-btn" data-frame="${f.id}"
+                style="${_frameBtn(!!(polyMap[f.id]?.length >= 3), f.id)}">
+                ${f.name}
+              </button>`).join('')}
+            </div>
+          </div>`
+        : '';
+
+    const sharedSummary = _polySummary(polyMap.shared);
 
     return `
     <div class="component-block" id="inspector-physics-section">
@@ -312,13 +329,21 @@ export function buildPhysicsInspectorHTML(obj) {
         <div id="phys-extra" style="display:${type==='none'?'none':'flex'};flex-direction:column;gap:5px;">
 
           <div class="prop-row">
-            <span class="prop-label">Shape</span>
-            <span style="font-size:10px;color:${shapeColor};">${shapeLabel}</span>
+            <span class="prop-label">Collision</span>
+            <select id="phys-shape" style="${_sel()}">
+              ${SOPT('box','▭ Box')} ${SOPT('circle','◯ Circle')} ${SOPT('polygon','⬡ Polygon')}
+            </select>
           </div>
 
-          <div style="background:#0d0d1a;border:1px solid #7c3aed33;border-radius:3px;padding:4px 7px;font-size:9px;color:#7c6aaa;line-height:1.5;">
-            ✏ Edit collision shape in the <strong style="color:#a78bfa;">Animation Editor</strong><br>
-            (double-click the object → Collision tab)
+          <div id="phys-polygon-row" style="display:${shape==='polygon'?'flex':'none'};flex-direction:column;gap:4px;">
+            <button id="phys-edit-polygon" style="${_btn('#7c3aed')}width:100%;">
+              ✏ Edit Collision Shape
+            </button>
+            <button id="phys-autofit" style="${_btn('#06b6d4')}width:100%;margin-top:2px;">
+              🎯 Auto-fit from Sprite
+            </button>
+            <div style="color:#666;font-size:9px;text-align:center;">${sharedSummary}</div>
+            ${frameTabsHTML}
           </div>
 
           <div class="prop-row">
@@ -457,6 +482,9 @@ function _computeAlphaOBB(imageData, w, h) {
 export function bindPhysicsInspector(obj) {
     const typeEl  = document.getElementById('phys-type');
     const extra   = document.getElementById('phys-extra');
+    const shapeEl = document.getElementById('phys-shape');
+    const polyRow = document.getElementById('phys-polygon-row');
+    const editBtn = document.getElementById('phys-edit-polygon');
     const fricEl  = document.getElementById('phys-friction');
     const bnceEl  = document.getElementById('phys-bounce');
     if (!typeEl) return;
@@ -471,6 +499,37 @@ export function bindPhysicsInspector(obj) {
         }
         _pushUndo();
         import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+    });
+
+    shapeEl?.addEventListener('change', () => {
+        obj.physicsShape = shapeEl.value;
+        if (polyRow) polyRow.style.display = shapeEl.value === 'polygon' ? 'flex' : 'none';
+        _pushUndo();
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+    });
+
+    // "Edit" button — opens shared polygon editor
+    editBtn?.addEventListener('click', () => openPolygonEditor(obj, 'shared'));
+
+    // "Auto-fit" button
+    document.getElementById('phys-autofit')?.addEventListener('click', () => {
+        _autoFitCollisionShape(obj);
+        _pushUndo();
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+        // Show toast
+        const toast = document.createElement('div');
+        toast.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:#0a2a1a;border:1px solid #4ade80;color:#4ade80;border-radius:4px;padding:6px 18px;font-size:11px;z-index:99999;pointer-events:none;';
+        toast.textContent = '🎯 Collision shape auto-fitted';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 2000);
+    });
+
+    // Per-frame buttons
+    document.querySelectorAll('.pe-frame-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const frameId = btn.dataset.frame;
+            openPolygonEditor(obj, frameId);
+        });
     });
 
     fricEl?.addEventListener('change', () => {
@@ -564,9 +623,6 @@ export function openPolygonEditor(obj, frameId = 'shared') {
           <button id="pe-box"    style="${_btn('#3b82f6')}">↺ Box</button>
           <button id="pe-circle" style="${_btn('#06b6d4')}">↺ Circle</button>
           <button id="pe-clear"  style="${_btn('#ef4444')}">✕ Clear</button>
-          <div style="width:1px;height:16px;background:#222;margin:0 2px;"></div>
-          <button id="pe-undo" style="${_btn('#888')}" title="Undo (Ctrl+Z)">↩</button>
-          <button id="pe-redo" style="${_btn('#888')}" title="Redo (Ctrl+Y)">↪</button>
         </div>
       </div>
 
@@ -586,9 +642,6 @@ export function openPolygonEditor(obj, frameId = 'shared') {
             </label>
             <label style="color:#666;font-size:10px;display:flex;align-items:center;gap:4px;">
               <input id="pe-show-sprite" type="checkbox" checked style="accent-color:#7c3aed;"> Preview sprite
-            </label>
-            <label style="color:#666;font-size:10px;display:flex;align-items:center;gap:4px;">
-              <input id="pe-snap-grid" type="checkbox" style="accent-color:#7c3aed;"> Snap
             </label>
           </div>
         </div>
@@ -626,44 +679,10 @@ export function openPolygonEditor(obj, frameId = 'shared') {
 
     const SNAP = 10 / SCALE;
     let dragging = -1, hover = -1;
-    let snapToGrid = false;
-    const GRID_SNAP = Math.max(2, Math.round(Math.min(sprW, sprH) / 16)); // local-px snap size
-
-    // Undo/redo stacks
-    const _undoStack = [JSON.stringify(pts)];
-    let _undoIdx = 0;
-
-    function _pushHistory() {
-        // Discard any future states
-        _undoStack.splice(_undoIdx + 1);
-        _undoStack.push(JSON.stringify(pts));
-        if (_undoStack.length > 50) _undoStack.shift();
-        _undoIdx = _undoStack.length - 1;
-    }
-    function _undo() {
-        if (_undoIdx <= 0) return;
-        _undoIdx--;
-        pts = JSON.parse(_undoStack[_undoIdx]);
-        draw();
-    }
-    function _redo() {
-        if (_undoIdx >= _undoStack.length - 1) return;
-        _undoIdx++;
-        pts = JSON.parse(_undoStack[_undoIdx]);
-        draw();
-    }
 
     // Coordinate helpers — origin at top-left of canvas, local origin at canvas centre
     function toCanvas(p) { return { x: (p.x + sprW/2) * SCALE, y: (p.y + sprH/2) * SCALE }; }
-    function toLocal(cx, cy) {
-        let lx = cx / SCALE - sprW/2;
-        let ly = cy / SCALE - sprH/2;
-        if (snapToGrid) {
-            lx = Math.round(lx / GRID_SNAP) * GRID_SNAP;
-            ly = Math.round(ly / GRID_SNAP) * GRID_SNAP;
-        }
-        return { x: lx, y: ly };
-    }
+    function toLocal(cx, cy) { return { x: cx / SCALE - sprW/2, y: cy / SCALE - sprH/2 }; }
 
     function evPos(e) {
         const r  = canvas.getBoundingClientRect();
@@ -701,13 +720,6 @@ export function openPolygonEditor(obj, frameId = 'shared') {
             ctx.strokeStyle = 'rgba(255,255,255,0.04)'; ctx.lineWidth = 0.5;
             for (let x = cvW/2 % step; x < cvW; x += step) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,cvH); ctx.stroke(); }
             for (let y = cvH/2 % step; y < cvH; y += step) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cvW,y); ctx.stroke(); }
-            // Snap grid overlay
-            if (snapToGrid) {
-                const snapStep = GRID_SNAP * SCALE;
-                ctx.strokeStyle = 'rgba(124,58,237,0.18)'; ctx.lineWidth = 0.5;
-                for (let x = cvW/2 % snapStep; x < cvW; x += snapStep) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,cvH); ctx.stroke(); }
-                for (let y = cvH/2 % snapStep; y < cvH; y += snapStep) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cvW,y); ctx.stroke(); }
-            }
             // Centre cross
             ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.setLineDash([3,3]);
             ctx.beginPath(); ctx.moveTo(cvW/2,0); ctx.lineTo(cvW/2,cvH); ctx.stroke();
@@ -788,12 +800,12 @@ export function openPolygonEditor(obj, frameId = 'shared') {
         const { cx, cy } = evPos(e);
         if (e.button === 2) {
             const i = nearestPt(cx, cy);
-            if (i >= 0) { pts.splice(i, 1); hover = -1; _pushHistory(); draw(); }
+            if (i >= 0) { pts.splice(i, 1); hover = -1; draw(); }
             return;
         }
         const i = nearestPt(cx, cy);
         if (i >= 0) { dragging = i; canvas.style.cursor = 'grabbing'; }
-        else { pts.push(toLocal(cx, cy)); _pushHistory(); draw(); }
+        else { pts.push(toLocal(cx, cy)); draw(); }
     });
 
     const _onMove = e => {
@@ -803,7 +815,7 @@ export function openPolygonEditor(obj, frameId = 'shared') {
         canvas.style.cursor = hover >= 0 ? 'grab' : 'crosshair';
         if (hover !== old) draw();
     };
-    const _onUp = () => { if (dragging >= 0) { dragging = -1; canvas.style.cursor = hover >= 0 ? 'grab' : 'crosshair'; _pushHistory(); draw(); } };
+    const _onUp = () => { if (dragging >= 0) { dragging = -1; canvas.style.cursor = hover >= 0 ? 'grab' : 'crosshair'; draw(); } };
 
     window.addEventListener('mousemove', _onMove);
     window.addEventListener('mouseup',   _onUp);
@@ -811,27 +823,13 @@ export function openPolygonEditor(obj, frameId = 'shared') {
 
     panel.querySelector('#pe-show-grid').addEventListener('change',   e => { showGrid   = e.target.checked; draw(); });
     panel.querySelector('#pe-show-sprite').addEventListener('change', e => { showSprite = e.target.checked; draw(); });
-    panel.querySelector('#pe-snap-grid').addEventListener('change',   e => { snapToGrid = e.target.checked; });
-    panel.querySelector('#pe-box').addEventListener('click',    () => { pts = _defaultBox(sprW, sprH);       _pushHistory(); draw(); });
-    panel.querySelector('#pe-circle').addEventListener('click', () => { pts = _defaultCircle(Math.min(sprW, sprH) / 2); _pushHistory(); draw(); });
-    panel.querySelector('#pe-clear').addEventListener('click',  () => { pts = []; _pushHistory(); draw(); });
-    panel.querySelector('#pe-undo')?.addEventListener('click', _undo);
-    panel.querySelector('#pe-redo')?.addEventListener('click', _redo);
-
-    // Keyboard shortcuts: Ctrl+Z undo, Ctrl+Y/Ctrl+Shift+Z redo, Delete/Backspace remove hover
-    const _keyHandler = e => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); _undo(); }
-        else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); _redo(); }
-        else if ((e.key === 'Delete' || e.key === 'Backspace') && hover >= 0) {
-            pts.splice(hover, 1); hover = -1; _pushHistory(); draw();
-        }
-    };
-    window.addEventListener('keydown', _keyHandler);
+    panel.querySelector('#pe-box').addEventListener('click',    () => { pts = _defaultBox(sprW, sprH);       draw(); });
+    panel.querySelector('#pe-circle').addEventListener('click', () => { pts = _defaultCircle(Math.min(sprW, sprH) / 2); draw(); });
+    panel.querySelector('#pe-clear').addEventListener('click',  () => { pts = []; draw(); });
 
     function saveAndClose() {
         window.removeEventListener('mousemove', _onMove);
         window.removeEventListener('mouseup',   _onUp);
-        window.removeEventListener('keydown',   _keyHandler);
         if (pts.length >= 3) {
             if (!obj.physicsPolygons) obj.physicsPolygons = {};
             obj.physicsPolygons[frameId] = pts.map(p => ({ x: p.x, y: p.y }));
@@ -861,14 +859,12 @@ export function openPolygonEditor(obj, frameId = 'shared') {
     panel.querySelector('#pe-cancel').addEventListener('click', () => {
         window.removeEventListener('mousemove', _onMove);
         window.removeEventListener('mouseup',   _onUp);
-        window.removeEventListener('keydown',   _keyHandler);
         panel.remove();
     });
     panel.addEventListener('mousedown', e => {
         if (e.target === panel) {
             window.removeEventListener('mousemove', _onMove);
             window.removeEventListener('mouseup',   _onUp);
-            window.removeEventListener('keydown',   _keyHandler);
             panel.remove();
         }
     });
