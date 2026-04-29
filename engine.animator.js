@@ -19,6 +19,7 @@
  * ============================================================ */
 
 import { state } from './engine.state.js';
+import { alphaBoundsForDataURL } from './engine.collision-overlay.js';
 
 // ── Auto-fit collision shape from a specific dataURL ─────────
 function _autoFitFromDataURL(obj, dataURL, frameId, onDone) {
@@ -42,17 +43,24 @@ function _autoFitFromDataURL(obj, dataURL, frameId, onDone) {
             }
         } catch(_) {}
         const cx = w / 2, cy = h / 2;
-        const hull = found ? [
+        // Hull is computed in TEXTURE pixels, then scaled into container-local px
+        // so it matches obj.scale / physicsSize / alpha-bounds units used everywhere else.
+        const src = obj.spriteGraphic || obj._runtimeSprite;
+        const ssx = Math.abs(src?.scale?.x ?? 1) || 1;
+        const ssy = Math.abs(src?.scale?.y ?? 1) || 1;
+        const hullTex = found ? [
             { x: minX - cx, y: minY - cy }, { x: maxX - cx, y: minY - cy },
             { x: maxX - cx, y: maxY - cy }, { x: minX - cx, y: maxY - cy },
         ] : [
             { x: -cx, y: -cy }, { x: cx, y: -cy },
             { x: cx, y: cy },  { x: -cx, y: cy },
         ];
+        const hull = hullTex.map(p => ({ x: p.x * ssx, y: p.y * ssy }));
         if (!obj.physicsPolygons) obj.physicsPolygons = {};
         obj.physicsPolygons[frameId] = hull;
         if (frameId === 'shared') obj.physicsPolygon = hull.slice();
         obj.physicsShape = 'polygon';
+        obj._polyUnit = 'container';
         onDone?.();
     };
     img.src = dataURL;
@@ -512,16 +520,24 @@ function _wire(modal, obj) {
         });
     });
 
+    const _onPolySaved = () => {
+        // Re-render frame thumbs + preview so the new shape shows up immediately
+        _renderFrameStrip(modal, obj);
+        _renderPreviewCanvas(modal, obj);
+        _updateColFrameInfo();
+        _dirty = true;
+    };
+
     modal.querySelector('#anim-col-edit-frame')?.addEventListener('click', () => {
         const anim  = _currentAnim(obj);
         const frame = anim?.frames?.[currentFrame];
         if (!frame) { _showToast(modal, '⚠ Select a frame first'); return; }
-        import('./engine.physics.js').then(m => m.openPolygonEditor(obj, frame.id));
+        import('./engine.physics.js').then(m => m.openPolygonEditor(obj, frame.id, { onSave: _onPolySaved }));
         _dirty = true;
     });
 
     modal.querySelector('#anim-col-edit-shared')?.addEventListener('click', () => {
-        import('./engine.physics.js').then(m => m.openPolygonEditor(obj, 'shared'));
+        import('./engine.physics.js').then(m => m.openPolygonEditor(obj, 'shared', { onSave: _onPolySaved }));
         _dirty = true;
     });
 
@@ -539,6 +555,8 @@ function _wire(modal, obj) {
     });
 
     modal.querySelector('#anim-col-copy-all')?.addEventListener('click', () => {
+        // Make sure all polygons share the unified container-local unit before copy
+        import('./engine.physics.js').then(m => m.migratePolygonsToContainer?.(obj));
         const anim  = _currentAnim(obj);
         const frame = anim?.frames?.[currentFrame];
         const polyMap = obj.physicsPolygons || {};
@@ -552,6 +570,7 @@ function _wire(modal, obj) {
         allAnims.forEach(a => (a.frames || []).forEach(f => {
             obj.physicsPolygons[f.id] = src.map(p => ({ ...p }));
         }));
+        obj._polyUnit = 'container';
         _updateColFrameInfo();
         _showToast(modal, '📋 Shape copied to all frames');
         import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
@@ -978,9 +997,28 @@ function _drawCollisionOnCanvas(ctx, obj, frame, cvW, cvH) {
         poly = obj.physicsPolygon;
     }
 
-    const shape  = obj.physicsShape ?? 'box';
-    const cx     = cvW / 2;
-    const cy     = cvH / 2;
+    // Polygons + physicsSize are stored in CONTAINER-local pixels (= texture-px × innerScale).
+    // The animator preview canvas is sized in TEXTURE pixels (frame's natural image dims).
+    // To draw container-local values on the texture-px canvas we multiply by 1/innerScale.
+    const sg = obj.spriteGraphic;
+    let innerSx = Math.abs(sg?.scale?.x ?? 0) || 0;
+    let innerSy = Math.abs(sg?.scale?.y ?? 0) || 0;
+    if (!innerSx || !innerSy) {
+        // Fallback: derive innerScale from "fit max dimension to 100" rule
+        const maxDim = Math.max(cvW, cvH) || 1;
+        const fit    = 100 / maxDim;
+        innerSx = innerSx || fit;
+        innerSy = innerSy || fit;
+    }
+    const ratioX = 1 / innerSx;   // container-px → canvas-px
+    const ratioY = 1 / innerSy;
+
+    const shape = obj.physicsShape ?? 'box';
+    const cx    = cvW / 2;
+    const cy    = cvH / 2;
+    const ps    = obj.physicsSize || {};
+    const ox    = (typeof ps.ox === 'number' ? ps.ox : 0) * ratioX;
+    const oy    = (typeof ps.oy === 'number' ? ps.oy : 0) * ratioY;
 
     // Determine colour by body type
     const typeColours = {
@@ -990,57 +1028,92 @@ function _drawCollisionOnCanvas(ctx, obj, frame, cvW, cvH) {
     };
     const col = typeColours[obj.physicsBody] || '#a78bfa';
 
+    // Per-frame alpha-trim bounds in TEXTURE px (cached, async first time)
+    const ab = frame.dataURL
+        ? alphaBoundsForDataURL(frame.dataURL, () => {
+            // When ready, request a redraw of this frame thumb
+            try { _scheduleFrameThumbRedraw?.(obj, frame); } catch (_) {}
+        })
+        : null;
+
     ctx.save();
 
     if (shape === 'circle') {
-        const r = Math.min(cvW, cvH) / 2 - 1;
+        let r, ccx, ccy;
+        if (typeof ps.r === 'number' && ps.r > 0) {
+            r   = ps.r * Math.min(ratioX, ratioY);
+            ccx = cx + ox;     // user-set offset (already container→canvas scaled)
+            ccy = cy + oy;
+        } else if (ab) {
+            // ab.ox/oy is the alpha-bbox CENTRE offset from texture centre (texture px)
+            r   = Math.min(ab.w, ab.h) / 2;
+            ccx = cx + ab.ox;
+            ccy = cy + ab.oy;
+        } else {
+            r   = Math.min(cvW, cvH) / 2 - 1;
+            ccx = cx; ccy = cy;
+        }
         ctx.strokeStyle = col;
         ctx.lineWidth   = 1.5;
         ctx.globalAlpha = 0.75;
         ctx.fillStyle   = col + '28';
         ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.arc(ccx, ccy, Math.max(1, r), 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
     } else if (shape === 'polygon' && poly) {
-        // Polygon vertices are in local-pixel coords centred at origin.
-        // Map to canvas coords.
         ctx.strokeStyle = col;
         ctx.lineWidth   = 1.5;
         ctx.globalAlpha = 0.75;
         ctx.fillStyle   = col + '28';
         ctx.beginPath();
         poly.forEach((p, i) => {
-            const px = cx + p.x;
-            const py = cy + p.y;
+            const px = cx + p.x * ratioX;
+            const py = cy + p.y * ratioY;
             if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
         });
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
         // Vertex dots
-        ctx.fillStyle = col;
+        ctx.fillStyle   = col;
         ctx.globalAlpha = 0.9;
         poly.forEach(p => {
             ctx.beginPath();
-            ctx.arc(cx + p.x, cy + p.y, 2.5, 0, Math.PI * 2);
+            ctx.arc(cx + p.x * ratioX, cy + p.y * ratioY, 2.5, 0, Math.PI * 2);
             ctx.fill();
         });
     } else {
-        // Default box — use raw sprite size (canvas size)
+        // Default / box — use physicsSize if present, else alpha-trim of this frame
+        let w, h, bx, by;
+        if (typeof ps.w === 'number' && ps.w > 0 && typeof ps.h === 'number' && ps.h > 0) {
+            w  = ps.w * ratioX;
+            h  = ps.h * ratioY;
+            bx = cx - w / 2 + ox;
+            by = cy - h / 2 + oy;
+        } else if (ab) {
+            // ab.ox/oy is the alpha-bbox CENTRE offset from texture centre
+            w  = ab.w;
+            h  = ab.h;
+            bx = cx + ab.ox - w / 2;
+            by = cy + ab.oy - h / 2;
+        } else {
+            const pad = 1;
+            w = cvW - pad * 2; h = cvH - pad * 2;
+            bx = pad; by = pad;
+        }
         ctx.strokeStyle = col;
         ctx.lineWidth   = 1.5;
         ctx.globalAlpha = 0.65;
         ctx.fillStyle   = col + '1a';
-        const pad = 1;
-        ctx.fillRect(pad, pad, cvW - pad * 2, cvH - pad * 2);
-        ctx.strokeRect(pad, pad, cvW - pad * 2, cvH - pad * 2);
+        ctx.fillRect(bx, by, Math.max(1, w), Math.max(1, h));
+        ctx.strokeRect(bx, by, Math.max(1, w), Math.max(1, h));
     }
 
     // Label what source the shape is from
     if (obj.physicsBody && obj.physicsBody !== 'none') {
         const isFrameSpecific = frame.id && Array.isArray(polyMap[frame.id]) && polyMap[frame.id].length >= 3;
-        const label = isFrameSpecific ? '⬡ frame' : (polyMap.shared?.length >= 3 ? '⬡ shared' : '⬡ default box');
+        const label = isFrameSpecific ? '⬡ frame' : (polyMap.shared?.length >= 3 ? '⬡ shared' : '⬡ default');
         ctx.globalAlpha = 0.7;
         ctx.fillStyle   = col;
         ctx.font        = 'bold 8px monospace';

@@ -357,8 +357,11 @@ function _snapshotScene() {
                 physicsFriction: obj.physicsFriction ?? 0.3,
                 physicsRestitution: obj.physicsRestitution ?? 0.1,
                 physicsShape: obj.physicsShape ?? 'box',
+                physicsSize: obj.physicsSize ? JSON.parse(JSON.stringify(obj.physicsSize)) : null,
                 physicsPolygon: obj.physicsPolygon ? JSON.parse(JSON.stringify(obj.physicsPolygon)) : null,
                 physicsPolygons: obj.physicsPolygons ? JSON.parse(JSON.stringify(obj.physicsPolygons)) : null,
+                _polyUnit: obj._polyUnit || null,
+                _collisionShapeInit: !!obj._collisionShapeInit,
             };
         }),
         camX: state.sceneContainer?.x ?? 0, camY: state.sceneContainer?.y ?? 0,
@@ -410,8 +413,11 @@ function _restoreScene(snap) {
                 obj.physicsFriction    = s.physicsFriction    ?? 0.3;
                 obj.physicsRestitution = s.physicsRestitution ?? 0.1;
                 obj.physicsShape       = s.physicsShape       ?? 'box';
+                obj.physicsSize        = s.physicsSize     ? JSON.parse(JSON.stringify(s.physicsSize))     : null;
                 obj.physicsPolygon     = s.physicsPolygon  ? JSON.parse(JSON.stringify(s.physicsPolygon))  : null;
                 obj.physicsPolygons    = s.physicsPolygons ? JSON.parse(JSON.stringify(s.physicsPolygons)) : null;
+                obj._polyUnit          = s._polyUnit || null;
+                obj._collisionShapeInit = !!s._collisionShapeInit;
                 if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
                 return obj;
             }

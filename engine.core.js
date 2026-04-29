@@ -432,6 +432,19 @@ function _copySelected() {
             tint: obj.spriteGraphic?.tint ?? 0xFFFFFF,
             animations: obj.animations ? JSON.parse(JSON.stringify(obj.animations)) : [],
             activeAnimIndex: obj.activeAnimIndex || 0,
+            // ── Physics / collision settings ─────────────────────
+            physicsBody:        obj.physicsBody        ?? 'none',
+            physicsShape:       obj.physicsShape       ?? 'box',
+            physicsFriction:    obj.physicsFriction    ?? 0.3,
+            physicsRestitution: obj.physicsRestitution ?? 0.1,
+            physicsSize:        obj.physicsSize        ? JSON.parse(JSON.stringify(obj.physicsSize))     : null,
+            physicsPolygon:     obj.physicsPolygon     ? JSON.parse(JSON.stringify(obj.physicsPolygon))  : null,
+            physicsPolygons:    obj.physicsPolygons    ? JSON.parse(JSON.stringify(obj.physicsPolygons)) : null,
+            _polyUnit:          obj._polyUnit || null,
+            _collisionShapeInit: !!obj._collisionShapeInit,
+            // ── Misc visual settings ─────────────────────────────
+            visible:  obj.visible !== false,
+            alpha:    obj.alpha ?? 1,
         };
     }
     _logConsole('⎘ Copied: ' + obj.label, '#9bc');
@@ -497,17 +510,49 @@ function _pasteObject() {
         obj.prefabId = null;
         if (obj.spriteGraphic?.tint !== undefined) obj.spriteGraphic.tint = cb.tint;
 
+        // ── Animations: re-id frames so they are unique, but keep an id-map so
+        //               per-frame physics polygons stay attached to the right frame.
+        const idMap = {};   // oldFrameId → newFrameId
         if (cb.animations?.length) {
-            obj.animations = JSON.parse(JSON.stringify(cb.animations)).map(anim => ({
-                ...anim,
-                id: 'anim_' + Date.now() + '_' + Math.random().toString(36).slice(2),
-                frames: anim.frames.map(f => ({
-                    ...f,
-                    id: 'frame_' + Date.now() + '_' + Math.random().toString(36).slice(2),
-                })),
-            }));
+            obj.animations = JSON.parse(JSON.stringify(cb.animations)).map((anim, ai) => {
+                const newAnim = {
+                    ...anim,
+                    id: 'anim_' + Date.now() + '_' + ai + '_' + Math.random().toString(36).slice(2),
+                    frames: anim.frames.map((f, fi) => {
+                        const nid = 'frame_' + Date.now() + '_' + ai + '_' + fi + '_' + Math.random().toString(36).slice(2);
+                        if (f.id) idMap[f.id] = nid;
+                        return { ...f, id: nid };
+                    }),
+                };
+                return newAnim;
+            });
             obj.activeAnimIndex = cb.activeAnimIndex || 0;
         }
+
+        // ── Physics / collision settings ─────────────────────────
+        if (cb.physicsBody)        obj.physicsBody        = cb.physicsBody;
+        if (cb.physicsShape)       obj.physicsShape       = cb.physicsShape;
+        if (typeof cb.physicsFriction    === 'number') obj.physicsFriction    = cb.physicsFriction;
+        if (typeof cb.physicsRestitution === 'number') obj.physicsRestitution = cb.physicsRestitution;
+        if (cb.physicsSize)     obj.physicsSize     = JSON.parse(JSON.stringify(cb.physicsSize));
+        if (cb.physicsPolygon)  obj.physicsPolygon  = JSON.parse(JSON.stringify(cb.physicsPolygon));
+        if (cb.physicsPolygons) {
+            // Remap per-frame polygon keys to the newly-generated frame ids
+            const remapped = {};
+            for (const k in cb.physicsPolygons) {
+                const v = cb.physicsPolygons[k];
+                if (k === 'shared')      remapped.shared    = JSON.parse(JSON.stringify(v));
+                else if (idMap[k])       remapped[idMap[k]] = JSON.parse(JSON.stringify(v));
+                else                     remapped[k]        = JSON.parse(JSON.stringify(v)); // legacy
+            }
+            obj.physicsPolygons = remapped;
+        }
+        if (cb._polyUnit) obj._polyUnit = cb._polyUnit;
+        obj._collisionShapeInit = !!cb._collisionShapeInit;
+
+        // Visual misc
+        if (typeof cb.alpha === 'number') obj.alpha = cb.alpha;
+        if (typeof cb.visible === 'boolean') obj.visible = cb.visible;
 
         if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
         state.clipboard = { ...cb, x: cb.x + 25, y: cb.y + 25 };
