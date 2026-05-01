@@ -1,265 +1,416 @@
 /* ============================================================
    Zengine — engine.audio.js
-   Audio asset import, playback, and inspector panel.
-   Supported: .mp3, .wav, .ogg, .m4a, .flac
-   Audio assets stored in state.audioAssets (shared, like images)
+   3D Spatial Audio Sources placed in the scene.
+   - Drag audio asset from panel → scene → creates AudioSource
+   - Shows range circle gizmo in editor
+   - Inspector: volume, loop, range, falloff
+   - Play mode: Web Audio PannerNode, positioned relative to camera
    ============================================================ */
 
 import { state } from './engine.state.js';
 
-// ── Import audio file(s) ──────────────────────────────────────
-export async function importAudioFile(file) {
-    const SUPPORTED = ['audio/mpeg','audio/wav','audio/ogg','audio/mp4','audio/flac','audio/x-flac','audio/aac'];
-    if (!SUPPORTED.some(t => file.type.startsWith(t.split('/')[0]) && file.name.match(/\.(mp3|wav|ogg|m4a|flac|aac)$/i))) {
-        _toast(`Unsupported format: ${file.name}`, 'error');
-        return null;
+// ── Web Audio context (shared) ────────────────────────────────
+let _audioCtx = null;
+function _getCtx() {
+    if (!_audioCtx || _audioCtx.state === 'closed') {
+        _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-
-    // Deduplicate by name
-    if (state.audioAssets.find(a => a.name === file.name)) {
-        _toast(`"${file.name}" already imported`, 'warn');
-        return null;
-    }
-
-    return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            const dataURL = e.target.result;
-
-            // Get duration via AudioContext
-            let duration = 0;
-            try {
-                const ctx    = new (window.AudioContext || window.webkitAudioContext)();
-                const buf    = await ctx.decodeAudioData(e.target.result.split(',')[1]
-                    ? _dataURLToArrayBuffer(dataURL) : new ArrayBuffer(0));
-                duration     = buf?.duration || 0;
-                ctx.close();
-            } catch (_) {}
-
-            const asset = {
-                id:       'audio_' + Date.now() + '_' + Math.random().toString(36).slice(2),
-                name:     file.name,
-                dataURL:  dataURL,
-                type:     file.type || 'audio/mpeg',
-                size:     file.size,
-                duration: duration,
-                volume:   1.0,
-                loop:     false,
-                _audio:   null,   // HTMLAudioElement — created on demand
-            };
-
-            state.audioAssets.push(asset);
-            refreshAudioPanel();
-            resolve(asset);
-        };
-        reader.readAsDataURL(file);
-    });
+    if (_audioCtx.state === 'suspended') _audioCtx.resume().catch(() => {});
+    return _audioCtx;
 }
 
-// ── Refresh the audio grid in the panel ──────────────────────
-export function refreshAudioPanel() {
-    const grid = document.getElementById('audio-grid');
-    if (!grid) return;
-    grid.innerHTML = '';
+// ── Play-mode audio nodes ─────────────────────────────────────
+let _playNodes = [];   // { source, panner, obj }
 
-    if (!state.audioAssets.length) {
-        grid.innerHTML = '<div style="color:#555; font-style:italic; padding:12px; font-size:11px;">No audio assets — import .mp3 .wav .ogg .m4a .flac</div>';
-        return;
-    }
+// ── Decoded audio buffer cache ────────────────────────────────
+const _bufferCache = new Map();  // assetId → AudioBuffer
 
-    for (const asset of state.audioAssets) {
-        const item = document.createElement('div');
-        item.style.cssText = `
-            display:flex; align-items:center; gap:8px;
-            padding:6px 10px; border-bottom:1px solid #222;
-            cursor:pointer; transition: background 0.1s;
-        `;
-
-        const ext = asset.name.split('.').pop().toUpperCase();
-        const dur = asset.duration > 0 ? _fmtDuration(asset.duration) : '—';
-
-        item.innerHTML = `
-            <div style="width:32px; height:32px; background:#1a2a3a; border:1px solid #2a4a6a;
-                        border-radius:4px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:#3A72A5;stroke-width:2;">
-                    <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
-                </svg>
-            </div>
-            <div style="flex:1; min-width:0;">
-                <div style="color:#ccc; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${asset.name}</div>
-                <div style="color:#666; font-size:10px;">${ext} · ${dur} · ${_fmtSize(asset.size)}</div>
-            </div>
-            <div style="display:flex; gap:4px; flex-shrink:0;">
-                <button class="audio-play-btn" data-id="${asset.id}"
-                        style="background:#1e3050; border:1px solid #3A72A5; color:#9bc; border-radius:3px;
-                               padding:2px 8px; cursor:pointer; font-size:11px;">▶</button>
-                <button class="audio-del-btn" data-id="${asset.id}"
-                        style="background:#3a1e1e; border:1px solid #6a2a2a; color:#f88; border-radius:3px;
-                               padding:2px 6px; cursor:pointer; font-size:11px;">✕</button>
-            </div>
-        `;
-
-        item.querySelector('.audio-play-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            _togglePlay(asset, e.target);
-        });
-        item.querySelector('.audio-del-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            _stopAudio(asset);
-            const idx = state.audioAssets.indexOf(asset);
-            if (idx !== -1) state.audioAssets.splice(idx, 1);
-            refreshAudioPanel();
-        });
-
-        item.addEventListener('click', () => _showAudioInspector(asset));
-        item.addEventListener('mouseenter', () => item.style.background = '#2a2a2a');
-        item.addEventListener('mouseleave', () => item.style.background = '');
-
-        grid.appendChild(item);
-    }
-}
-
-// ── Toggle play/pause ─────────────────────────────────────────
-let _currentlyPlaying = null;
-
-function _togglePlay(asset, btn) {
-    if (_currentlyPlaying && _currentlyPlaying !== asset) {
-        _stopAudio(_currentlyPlaying);
-        document.querySelectorAll('.audio-play-btn').forEach(b => b.textContent = '▶');
-    }
-    if (!asset._audio) {
-        asset._audio = new Audio(asset.dataURL);
-        asset._audio.volume = asset.volume ?? 1;
-        asset._audio.loop   = asset.loop   ?? false;
-        asset._audio.onended = () => { btn.textContent = '▶'; _currentlyPlaying = null; };
-    }
-    if (asset._audio.paused) {
-        asset._audio.play();
-        btn.textContent = '⏸';
-        _currentlyPlaying = asset;
-    } else {
-        asset._audio.pause();
-        btn.textContent = '▶';
-        _currentlyPlaying = null;
-    }
-}
-
-function _stopAudio(asset) {
-    if (asset._audio) { asset._audio.pause(); asset._audio.currentTime = 0; }
-}
-
-// ── Audio inspector popup ─────────────────────────────────────
-function _showAudioInspector(asset) {
-    document.getElementById('audio-inspector-popup')?.remove();
-
-    const popup = document.createElement('div');
-    popup.id = 'audio-inspector-popup';
-    popup.style.cssText = `
-        position:fixed; right:320px; bottom:240px;
-        width:260px; background:#242424; border:1px solid #444;
-        border-radius:4px; box-shadow:0 4px 20px rgba(0,0,0,0.7);
-        z-index:5000; font-size:11px; color:#e0e0e0; overflow:hidden;
-    `;
-
-    const dur = asset.duration > 0 ? _fmtDuration(asset.duration) : '—';
-    const ext = asset.name.split('.').pop().toUpperCase();
-
-    popup.innerHTML = `
-        <div style="background:#1a1a1a; padding:8px 12px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333;">
-            <span style="font-weight:bold; color:#9bc;">🎵 Audio Inspector</span>
-            <button id="audio-insp-close" style="background:none;border:none;color:#888;cursor:pointer;font-size:14px;">✕</button>
-        </div>
-        <div style="padding:12px; display:flex; flex-direction:column; gap:10px;">
-            <div style="color:#888; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${asset.name}">${asset.name}</div>
-
-            <div style="display:flex; gap:8px; font-size:10px; color:#666;">
-                <span>Format: <strong style="color:#aaa;">${ext}</strong></span>
-                <span>Duration: <strong style="color:#aaa;">${dur}</strong></span>
-                <span>Size: <strong style="color:#aaa;">${_fmtSize(asset.size)}</strong></span>
-            </div>
-
-            <div>
-                <label style="color:#888; font-size:10px; display:block; margin-bottom:4px;">Volume</label>
-                <div style="display:flex; align-items:center; gap:8px;">
-                    <input type="range" id="audio-insp-vol" min="0" max="1" step="0.01" value="${asset.volume}"
-                           style="flex:1; accent-color:#3A72A5;">
-                    <span id="audio-insp-vol-val" style="color:#fff; min-width:28px;">${Math.round(asset.volume * 100)}%</span>
-                </div>
-            </div>
-
-            <div style="display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" id="audio-insp-loop" ${asset.loop ? 'checked' : ''}
-                       style="accent-color:#3A72A5;">
-                <label for="audio-insp-loop" style="color:#ccc; cursor:pointer;">Loop</label>
-            </div>
-
-            <div style="display:flex; gap:6px;">
-                <button id="audio-insp-play" style="flex:1; background:#1e3050; border:1px solid #3A72A5;
-                        color:#9bc; border-radius:3px; padding:5px; cursor:pointer; font-size:11px;">▶ Play</button>
-                <button id="audio-insp-stop" style="background:#2a2a2a; border:1px solid #444;
-                        color:#888; border-radius:3px; padding:5px 10px; cursor:pointer; font-size:11px;">■ Stop</button>
-            </div>
-        </div>
-    `;
-
-    popup.querySelector('#audio-insp-close').addEventListener('click', () => popup.remove());
-
-    const volSlider = popup.querySelector('#audio-insp-vol');
-    const volVal    = popup.querySelector('#audio-insp-vol-val');
-    volSlider.addEventListener('input', () => {
-        asset.volume = parseFloat(volSlider.value);
-        volVal.textContent = Math.round(asset.volume * 100) + '%';
-        if (asset._audio) asset._audio.volume = asset.volume;
-    });
-
-    popup.querySelector('#audio-insp-loop').addEventListener('change', (e) => {
-        asset.loop = e.target.checked;
-        if (asset._audio) asset._audio.loop = asset.loop;
-    });
-
-    popup.querySelector('#audio-insp-play').addEventListener('click', () => {
-        const btn = document.querySelector(`.audio-play-btn[data-id="${asset.id}"]`);
-        _togglePlay(asset, btn || popup.querySelector('#audio-insp-play'));
-    });
-    popup.querySelector('#audio-insp-stop').addEventListener('click', () => {
-        _stopAudio(asset);
-        document.querySelectorAll('.audio-play-btn').forEach(b => b.textContent = '▶');
-    });
-
-    document.body.appendChild(popup);
-    setTimeout(() => {
-        document.addEventListener('click', function h(e) {
-            if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('click', h); }
-        });
-    }, 0);
-}
-
-// ── Helpers ───────────────────────────────────────────────────
-function _fmtDuration(s) {
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60).toString().padStart(2, '0');
-    return `${m}:${sec}`;
-}
-function _fmtSize(bytes) {
-    if (bytes < 1024) return bytes + 'B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
-}
-function _dataURLToArrayBuffer(dataURL) {
-    const b64  = dataURL.split(',')[1];
-    const bin  = atob(b64);
-    const buf  = new ArrayBuffer(bin.length);
+async function _decodeAsset(asset) {
+    if (_bufferCache.has(asset.id)) return _bufferCache.get(asset.id);
+    const ctx = _getCtx();
+    const b64 = asset.dataURL.split(',')[1];
+    const bin = atob(b64);
+    const buf = new ArrayBuffer(bin.length);
     const view = new Uint8Array(buf);
     for (let i = 0; i < bin.length; i++) view[i] = bin.charCodeAt(i);
-    return buf;
+    try {
+        const decoded = await ctx.decodeAudioData(buf);
+        _bufferCache.set(asset.id, decoded);
+        return decoded;
+    } catch (e) {
+        console.warn('Audio decode error:', e);
+        return null;
+    }
 }
-function _toast(msg, type = 'info') {
-    const t = document.createElement('div');
-    const bg = type === 'error' ? '#3a1e1e' : type === 'warn' ? '#3a3a1e' : '#1e3a1e';
-    const cl = type === 'error' ? '#f88'    : type === 'warn' ? '#fa8'    : '#8f8';
-    t.style.cssText = `position:fixed;bottom:30px;left:50%;transform:translateX(-50%);
-        background:${bg};border:1px solid;color:${cl};border-radius:4px;padding:6px 16px;font-size:11px;z-index:9999;`;
-    t.textContent = msg;
-    document.body.appendChild(t);
-    setTimeout(() => t.remove(), 2500);
+
+// ── Create an AudioSource object in the scene ─────────────────
+export function createAudioSource(assetIdOrObj, x, y, audioProps, label) {
+    const assetId = typeof assetIdOrObj === 'string' ? assetIdOrObj : assetIdOrObj?.id;
+    const asset   = state.assets.find(a => a.id === assetId);
+
+    const container = new PIXI.Container();
+    container.x = x || 0;
+    container.y = y || 0;
+    container.isAudioSource = true;
+    container.assetId  = assetId;
+    container.unityZ   = 0;
+
+    // Default audio properties
+    container.audioProps = Object.assign({
+        volume:  1.0,
+        loop:    true,
+        range:   300,       // pixels (3 units)
+        falloff: 'linear',  // 'linear' | 'inverse' | 'exponential'
+        autoPlay: true,
+        muted:   false,
+    }, audioProps || {});
+
+    // Auto-name
+    const baseName = asset ? asset.name.replace(/\.[^.]+$/, '') : 'AudioSource';
+    let nameCandidate = baseName;
+    let n = 2;
+    while (state.gameObjects.find(o => o.label === nameCandidate)) nameCandidate = `${baseName} (${n++})`;
+    container.label = label || nameCandidate;
+
+    // Range circle in WORLD-SPACE (direct child, scales with camera zoom)
+    const rangeCircle = new PIXI.Graphics();
+    container._rangeCircle = rangeCircle;
+    container.addChild(rangeCircle);
+    _drawRangeCircle(container);
+
+    // ── Gizmo container (constant screen size via ticker) ──
+    const gizmoContainer = new PIXI.Container();
+    container._gizmoContainer = gizmoContainer;
+    container.addChild(gizmoContainer);
+
+    // Audio icon
+    const icon = new PIXI.Graphics();
+    icon.beginFill(0x3A72A5, 0.9);
+    icon.drawRoundedRect(-14, -14, 28, 28, 6);
+    icon.endFill();
+    icon.lineStyle(2, 0x7ab8e8, 1);
+    icon.beginFill(0xffffff, 1);
+    icon.drawPolygon([-5, -4, -5, 4, -2, 4, 3, 8, 3, -8, -2, -4]);
+    icon.endFill();
+    icon.lineStyle(1.5, 0x9bc8e8, 0.8);
+    icon.arc(5, 0, 5, -0.7, 0.7);
+    icon.lineStyle(1.5, 0x9bc8e8, 0.5);
+    icon.arc(5, 0, 9, -0.9, 0.9);
+    container._icon = icon;
+    gizmoContainer.addChild(icon);
+
+    // Name label
+    const nameText = new PIXI.Text(container.label, {
+        fontSize: 10, fill: 0x9bc8e8, fontFamily: 'monospace',
+    });
+    nameText.anchor.set(0.5, 0);
+    nameText.y = 18;
+    gizmoContainer.addChild(nameText);
+    container._nameText = nameText;
+
+    // ── Translate-only gizmo handles (same structure as lights) ─
+    const grpTranslate = new PIXI.Container();
+    const grpRotate    = new PIXI.Container(); grpRotate.visible = false;
+    const grpScale     = new PIXI.Container(); grpScale.visible  = false;
+
+    const transX = _makeGizmoLine(0xFF4F4B, false);
+    const transY = _makeGizmoLine(0x8FC93A, true);
+    const transC = _makeGizmoDot(0xFFFFFF);
+    grpTranslate.addChild(transX, transY, transC);
+
+    gizmoContainer.addChild(grpTranslate, grpRotate, grpScale);
+    container._grpTranslate = grpTranslate;
+    container._grpRotate    = grpRotate;
+    container._grpScale     = grpScale;
+    container._gizmoHandles = {
+        transX, transY, transCenter: transC,
+        scaleX: transX, scaleY: transY, scaleCenter: transC,
+        rotRing: transC,
+    };
+
+    [transX, transY, transC].forEach(h => {
+        h.on('pointerdown', e => e.stopPropagation());
+    });
+
+    // Make whole container selectable
+    container.eventMode = 'static';
+    container.cursor    = 'pointer';
+    container.hitArea   = new PIXI.Circle(0, 0, 22);
+    container.on('pointerdown', (e) => {
+        if (state.isPlaying) { e.stopPropagation(); return; }
+        if (e.button !== 0) return;
+        import('./engine.objects.js').then(m => m.selectObject(container));
+    });
+
+    state.sceneContainer.addChild(container);
+    state.gameObjects.push(container);
+
+    import('./engine.ui.js').then(m => {
+        m.refreshHierarchy();
+        m.syncPixiToInspector();
+    });
+    import('./engine.playmode.js').then(m => m.updateCameraBoundsIfVisible?.());
+
+    if (state._bindGizmoHandles) state._bindGizmoHandles(container);
+
+    return container;
+}
+
+// ── Draw range circle ─────────────────────────────────────────
+export function _drawRangeCircle(obj) {
+    const g = obj._rangeCircle;
+    if (!g) return;
+    g.clear();
+    const r = obj.audioProps?.range ?? 300;
+    g.lineStyle(1.5, 0x3A72A5, 0.35);
+    g.drawCircle(0, 0, r);
+    // Inner half-range ring
+    g.lineStyle(1, 0x3A72A5, 0.15);
+    g.drawCircle(0, 0, r * 0.5);
+    // Tiny dot at center
+    g.lineStyle(0);
+    g.beginFill(0x3A72A5, 0.6);
+    g.drawCircle(0, 0, 3);
+    g.endFill();
+}
+
+// ── Build inspector HTML for an AudioSource ───────────────────
+export function buildAudioSourceInspectorHTML(obj) {
+    const p     = obj.audioProps;
+    const asset = state.assets.find(a => a.id === obj.assetId);
+    const name  = asset?.name || 'Unknown';
+    return `
+    <div class="component-block" style="border-left:3px solid #3A72A5;">
+        <div class="component-header" style="background:#12202e;">
+            <svg viewBox="0 0 24 24" class="comp-icon" style="color:#9bc;"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            <span style="color:#9bc;font-weight:600;">Audio Source</span>
+        </div>
+        <div class="component-body" style="background:#0e1a24;">
+            <div class="prop-row">
+                <span class="prop-label" style="color:#7ab;">Clip</span>
+                <span style="color:#9bc;font-size:10px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;" title="${name}">${name}</span>
+            </div>
+            <div class="prop-row">
+                <span class="prop-label">Volume</span>
+                <div style="display:flex;align-items:center;gap:6px;flex:1;">
+                    <input type="range" id="as-volume" min="0" max="1" step="0.01" value="${p.volume}"
+                           style="flex:1;accent-color:#3A72A5;">
+                    <span id="as-volume-val" style="color:#fff;min-width:28px;font-size:10px;">${Math.round(p.volume*100)}%</span>
+                </div>
+            </div>
+            <div class="prop-row">
+                <span class="prop-label">Range</span>
+                <div style="display:flex;align-items:center;gap:6px;flex:1;">
+                    <input type="number" id="as-range" value="${p.range}" min="10" max="5000" step="10"
+                           style="flex:1;background:#16161e;border:1px solid #2a3a48;color:#fff;border-radius:3px;padding:2px 6px;font-size:11px;">
+                    <span style="color:#666;font-size:10px;">px</span>
+                </div>
+            </div>
+            <div class="prop-row">
+                <span class="prop-label">Falloff</span>
+                <select id="as-falloff" style="flex:1;background:#16161e;border:1px solid #2a3a48;color:#ccc;border-radius:3px;padding:2px 4px;font-size:11px;">
+                    <option value="linear" ${p.falloff==='linear'?'selected':''}>Linear</option>
+                    <option value="inverse" ${p.falloff==='inverse'?'selected':''}>Inverse</option>
+                    <option value="exponential" ${p.falloff==='exponential'?'selected':''}>Exponential</option>
+                </select>
+            </div>
+            <div class="prop-row" style="gap:16px;">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="as-loop" ${p.loop?'checked':''} style="accent-color:#3A72A5;">
+                    <span style="color:#ccc;font-size:11px;">Loop</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="as-autoplay" ${p.autoPlay?'checked':''} style="accent-color:#3A72A5;">
+                    <span style="color:#ccc;font-size:11px;">Auto Play</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="as-muted" ${p.muted?'checked':''} style="accent-color:#3A72A5;">
+                    <span style="color:#ccc;font-size:11px;">Muted</span>
+                </label>
+            </div>
+        </div>
+    </div>`;
+}
+
+// ── Bind inspector events for AudioSource ─────────────────────
+export function bindAudioSourceInspector(obj) {
+    const vol   = document.getElementById('as-volume');
+    const volV  = document.getElementById('as-volume-val');
+    const range = document.getElementById('as-range');
+    const fall  = document.getElementById('as-falloff');
+    const loop  = document.getElementById('as-loop');
+    const auto  = document.getElementById('as-autoplay');
+    const muted = document.getElementById('as-muted');
+
+    if (!vol) return;
+
+    vol.addEventListener('input', () => {
+        obj.audioProps.volume = parseFloat(vol.value);
+        if (volV) volV.textContent = Math.round(obj.audioProps.volume * 100) + '%';
+        import('./engine.history.js').then(({ pushUndoDebounced }) => pushUndoDebounced());
+    });
+    range.addEventListener('input', () => {
+        obj.audioProps.range = parseFloat(range.value) || 300;
+        _drawRangeCircle(obj);
+        import('./engine.history.js').then(({ pushUndoDebounced }) => pushUndoDebounced());
+    });
+    fall.addEventListener('change', () => {
+        obj.audioProps.falloff = fall.value;
+        import('./engine.history.js').then(({ pushUndo }) => pushUndo());
+    });
+    loop.addEventListener('change', () => {
+        obj.audioProps.loop = loop.checked;
+        import('./engine.history.js').then(({ pushUndo }) => pushUndo());
+    });
+    auto.addEventListener('change', () => {
+        obj.audioProps.autoPlay = auto.checked;
+        import('./engine.history.js').then(({ pushUndo }) => pushUndo());
+    });
+    muted.addEventListener('change', () => {
+        obj.audioProps.muted = muted.checked;
+        import('./engine.history.js').then(({ pushUndo }) => pushUndo());
+    });
+}
+
+// ── Start all audio sources in play mode ──────────────────────
+export async function startPlayModeAudio() {
+    stopPlayModeAudio();
+    const ctx = _getCtx();
+
+    for (const obj of state.gameObjects) {
+        if (!obj.isAudioSource || obj.audioProps.muted) continue;
+        const asset = state.assets.find(a => a.id === obj.assetId);
+        if (!asset) continue;
+
+        const buffer = await _decodeAsset(asset);
+        if (!buffer) continue;
+
+        // Create panner
+        const panner = ctx.createPanner();
+        panner.panningModel    = 'HRTF';
+        panner.distanceModel   = obj.audioProps.falloff === 'inverse'      ? 'inverse'
+                               : obj.audioProps.falloff === 'exponential'  ? 'exponential'
+                               : 'linear';
+        panner.refDistance     = 1;
+        panner.maxDistance     = obj.audioProps.range;
+        panner.rolloffFactor   = 1;
+
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = obj.audioProps.volume;
+
+        panner.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.loop   = obj.audioProps.loop;
+        source.connect(panner);
+        source.start(0);
+
+        _playNodes.push({ source, panner, gainNode, obj });
+    }
+
+    // Start update loop for positional audio
+    _startPositionUpdater();
+}
+
+// ── Stop all play-mode audio ──────────────────────────────────
+export function stopPlayModeAudio() {
+    for (const node of _playNodes) {
+        try { node.source.stop(); } catch (_) {}
+    }
+    _playNodes = [];
+    _stopPositionUpdater();
+}
+
+// ── Positional updater ticker ─────────────────────────────────
+let _posUpdateId = null;
+
+function _startPositionUpdater() {
+    _stopPositionUpdater();
+    function update() {
+        if (!state.isPlaying) { _stopPositionUpdater(); return; }
+        const ctx = _audioCtx;
+        if (!ctx) return;
+
+        // Camera world position (origin of listener)
+        const sc = state.sceneContainer;
+        const camWorldX = -sc.x / sc.scale.x;
+        const camWorldY = -sc.y / sc.scale.y;
+
+        // Listener at origin
+        if (ctx.listener.positionX) {
+            ctx.listener.positionX.value = 0;
+            ctx.listener.positionY.value = 0;
+            ctx.listener.positionZ.value = 1;
+        } else {
+            ctx.listener.setPosition(0, 0, 1);
+        }
+
+        for (const node of _playNodes) {
+            const obj = node.obj;
+            // Position relative to camera, scaled by range
+            const dx = (obj.x - camWorldX) / (obj.audioProps.range || 300);
+            const dy = (obj.y - camWorldY) / (obj.audioProps.range || 300);
+            const dz = 0;
+            if (node.panner.positionX) {
+                node.panner.positionX.value = dx;
+                node.panner.positionY.value = -dy;
+                node.panner.positionZ.value = dz + 0.5;
+            } else {
+                node.panner.setPosition(dx, -dy, dz + 0.5);
+            }
+            node.gainNode.gain.value = obj.audioProps.volume;
+        }
+        _posUpdateId = requestAnimationFrame(update);
+    }
+    _posUpdateId = requestAnimationFrame(update);
+}
+
+function _stopPositionUpdater() {
+    if (_posUpdateId !== null) { cancelAnimationFrame(_posUpdateId); _posUpdateId = null; }
+}
+
+// ── Gizmo helper shapes ───────────────────────────────────────
+function _makeGizmoLine(color, vertical) {
+    const g = new PIXI.Graphics();
+    g.lineStyle(2, color, 1);
+    if (vertical) { g.moveTo(0, 0); g.lineTo(0, -40); }
+    else           { g.moveTo(0, 0); g.lineTo( 40,  0); }
+    g.endFill();
+    // Arrow tip
+    g.beginFill(color, 1);
+    if (vertical) g.drawPolygon([-4,-36, 4,-36, 0,-44]);
+    else          g.drawPolygon([36,-4, 36,4, 44,0]);
+    g.endFill();
+    g.eventMode = 'static';
+    g.cursor    = vertical ? 'ns-resize' : 'ew-resize';
+    g.hitArea   = vertical ? new PIXI.Rectangle(-6, -50, 12, 50)
+                           : new PIXI.Rectangle(0, -6, 50, 12);
+    return g;
+}
+
+function _makeGizmoDot(color) {
+    const g = new PIXI.Graphics();
+    g.beginFill(color, 0.8);
+    g.lineStyle(1.5, 0x333, 0.5);
+    g.drawRect(-6, -6, 12, 12);
+    g.endFill();
+    g.eventMode = 'static';
+    g.cursor    = 'move';
+    g.hitArea   = new PIXI.Rectangle(-8, -8, 16, 16);
+    return g;
+}
+
+// ── Snapshot / restore helpers (used by project.js) ──────────
+export function snapshotAudioSources() {
+    return state.gameObjects
+        .filter(o => o.isAudioSource)
+        .map(o => ({
+            isAudioSource: true,
+            label:     o.label,
+            assetId:   o.assetId,
+            x: o.x, y: o.y, unityZ: o.unityZ || 0,
+            audioProps: JSON.parse(JSON.stringify(o.audioProps)),
+        }));
 }

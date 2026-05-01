@@ -104,7 +104,7 @@ export function selectObject(obj) {
         state.spriteBox      = obj.spriteGraphic || null;
 
         if (obj._grpTranslate) {
-            if (obj.isLight) {
+            if (obj.isLight || obj.isAudioSource) {
                 obj._grpTranslate.visible = true;
                 obj._grpRotate.visible    = false;
                 obj._grpScale.visible     = false;

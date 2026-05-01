@@ -22,6 +22,7 @@ export function saveProject() {
         prefabs:     state.prefabs,
         scenes:      state.scenes,
         activeScene: state.activeSceneIndex,
+        sceneSettings: JSON.parse(JSON.stringify(state.sceneSettings)),
     };
 
     const json = JSON.stringify(project, null, 2);
@@ -111,6 +112,12 @@ function _applyProject(project) {
     state.scenes   = project.scenes  || [{ id: 'scene_1', name: 'Scene-1', snapshot: null }];
     state.activeSceneIndex = project.activeScene ?? 0;
 
+    // Restore scene settings
+    if (project.sceneSettings) {
+        Object.assign(state.sceneSettings, project.sceneSettings);
+        if (state.app) state.app.renderer.background.color = state.sceneSettings.bgColor;
+    }
+
     // Reload active scene
     import('./engine.scenes.js').then(m => {
         m.initScenes();
@@ -134,6 +141,15 @@ function _saveActiveScene() {
 
     scene.snapshot = {
         objects: state.gameObjects.map(obj => {
+            if (obj.isAudioSource) {
+                return {
+                    isAudioSource: true,
+                    label:     obj.label,
+                    assetId:   obj.assetId,
+                    x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
+                    audioProps: JSON.parse(JSON.stringify(obj.audioProps || {})),
+                };
+            }
             if (obj.isLight) {
                 return {
                     isLight: true, lightType: obj.lightType,
