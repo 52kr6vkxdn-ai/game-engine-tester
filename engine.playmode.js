@@ -1,13 +1,8 @@
 /* Zengine — engine.playmode.js v3 */
 import { state } from './engine.state.js';
 
-// These are kept as fallback defaults; actual dimensions come from state.sceneSettings
 export const GAME_WIDTH  = 1280;
 export const GAME_HEIGHT = 720;
-
-function _gameW() { return state.sceneSettings?.width  || GAME_WIDTH;  }
-function _gameH() { return state.sceneSettings?.height || GAME_HEIGHT; }
-function _camMode() { return state.sceneSettings?.cameraMode || 'landscape'; }
 
 export function enterPlayMode() {
     if (state.isPlaying) return;
@@ -25,8 +20,6 @@ export function enterPlayMode() {
     import('./engine.playmode.js').then(m => m.startRuntimeAnimations());
     // Start physics simulation
     import('./engine.physics.js').then(m => m.startPhysics());
-    // Start 3D spatial audio
-    import('./engine.audio.js').then(m => m.startPlayModeAudio());
     _logConsole('▶ Play Mode — Space or ■ to stop', '#4ade80');
 }
 
@@ -56,8 +49,6 @@ export function stopPlayMode() {
     stopRuntimeAnimations();
     // Stop physics
     import('./engine.physics.js').then(m => m.stopPhysics());
-    // Stop 3D spatial audio
-    import('./engine.audio.js').then(m => m.stopPlayModeAudio());
     _blockEditorInput(false);    // restore input
     _showEditorUI();
     // Store snapshot ref now — _restoreScene will clear state._playSnapshot
@@ -85,8 +76,7 @@ export function drawCameraBounds() {
 
     const lbl = document.createElement('div');
     lbl.style.cssText = 'position:absolute;top:-18px;left:0;color:rgba(255,200,60,0.8);font-size:9px;font-family:monospace;pointer-events:none;white-space:nowrap;';
-    const modeLabel = { landscape:'Landscape', portrait:'Portrait', adaptive:'Adaptive', auto:'Fill' };
-    lbl.textContent = `CAMERA  ${_gameW()} × ${_gameH()}  [${modeLabel[_camMode()] || _camMode()}]`;
+    lbl.textContent = `CAMERA  ${GAME_WIDTH} × ${GAME_HEIGHT}`;
     bounds.appendChild(lbl);
 
     // Corner decorations
@@ -104,12 +94,10 @@ export function drawCameraBounds() {
 function _positionCameraBounds(el) {
     if (!state.sceneContainer) return;
     const sc  = state.sceneContainer;
-    const gw  = _gameW();
-    const gh  = _gameH();
-    const tlx = sc.x + (-gw/2) * sc.scale.x;
-    const tly = sc.y + (-gh/2) * sc.scale.y;
-    const w   = gw * sc.scale.x;
-    const h   = gh * sc.scale.y;
+    const tlx = sc.x + (-GAME_WIDTH/2) * sc.scale.x;
+    const tly = sc.y + (-GAME_HEIGHT/2) * sc.scale.y;
+    const w   = GAME_WIDTH  * sc.scale.x;
+    const h   = GAME_HEIGHT * sc.scale.y;
     el.style.left   = tlx + 'px';
     el.style.top    = tly + 'px';
     el.style.width  = w + 'px';
@@ -129,49 +117,21 @@ function _expandCanvasGameCamera() {
     el.dataset.origStyle = el.getAttribute('style') || '';
     el.style.cssText = 'position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:9000!important;background:#000;';
 
-    if (!state.app || !state.sceneContainer) return;
+    if (state.app && state.sceneContainer) {
+        const sw = window.innerWidth;
+        const sh = window.innerHeight;
+        state.app.renderer.resize(sw, sh);
 
-    const sw   = window.innerWidth;
-    const sh   = window.innerHeight;
-    const gw   = _gameW();
-    const gh   = _gameH();
-    const mode = _camMode();
+        // Snap to game camera: center world-origin at screen center,
+        // scale so GAME_WIDTH/HEIGHT fits the screen (letterbox)
+        const scaleX = sw / GAME_WIDTH;
+        const scaleY = sh / GAME_HEIGHT;
+        const gameCamScale = Math.min(scaleX, scaleY); // letterbox
 
-    state.app.renderer.resize(sw, sh);
-
-    let gameCamScale;
-
-    if (mode === 'auto') {
-        // Fill screen: crop content outside the viewport — no black bars
-        gameCamScale = Math.max(sw / gw, sh / gh);
-    } else if (mode === 'landscape') {
-        // Letterbox/pillarbox to maintain landscape ratio
-        gameCamScale = Math.min(sw / gw, sh / gh);
-    } else if (mode === 'portrait') {
-        // Letterbox/pillarbox to maintain portrait ratio
-        gameCamScale = Math.min(sw / gw, sh / gh);
-    } else if (mode === 'adaptive') {
-        // Detect device orientation and pick best fit without black bars
-        const deviceIsLandscape = sw >= sh;
-        const contentIsLandscape = gw >= gh;
-        if (deviceIsLandscape === contentIsLandscape) {
-            // Orientation matches — fill without bars
-            gameCamScale = Math.min(sw / gw, sh / gh);
-        } else {
-            // Orientation mismatch — rotate content 90° (swap w/h for scale calc)
-            gameCamScale = Math.min(sw / gh, sh / gw);
-            // For adaptive mode, we don't rotate the actual canvas — just scale
-            // to the best fit so the game plays without black bars even on mismatch
-            gameCamScale = Math.max(sw / gw, sh / gh);
-        }
-    } else {
-        // Default: letterbox
-        gameCamScale = Math.min(sw / gw, sh / gh);
+        state.sceneContainer.scale.set(gameCamScale);
+        state.sceneContainer.x = sw / 2;
+        state.sceneContainer.y = sh / 2;
     }
-
-    state.sceneContainer.scale.set(gameCamScale);
-    state.sceneContainer.x = sw / 2;
-    state.sceneContainer.y = sh / 2;
 }
 
 /* ── Block/unblock all editor interaction during play ── */
@@ -283,7 +243,6 @@ function _hideAllGizmosAndGrid() {
         if (obj.isLight && obj._lightHelper) obj._lightHelper.visible = false;
         if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = false;
         if (obj.isAutoTilemap && obj._autoTileHelper) obj._autoTileHelper.visible = false;
-        if (obj.isAudioSource) obj.visible = false;
     });
     if (state.gridGraphics) state.gridGraphics.visible = false;
     if (state.spriteBox)    state.spriteBox.visible    = false;
@@ -317,8 +276,7 @@ function _showPlayOverlay() {
     const res = document.createElement('div');
     res.id = 'play-res-label';
     res.style.cssText = 'position:fixed;bottom:14px;left:18px;z-index:9999;color:rgba(255,255,255,0.2);font-family:monospace;font-size:10px;pointer-events:none;';
-    const modeLabel = { landscape:'Landscape', portrait:'Portrait', adaptive:'Adaptive', auto:'Fill Screen' };
-    res.textContent = `${_gameW()}×${_gameH()}  ·  ${modeLabel[_camMode()] || _camMode().toUpperCase()}  ·  PREVIEW`;
+    res.textContent = `${GAME_WIDTH}×${GAME_HEIGHT}  ·  PREVIEW MODE`;
     document.body.appendChild(res);
 }
 
@@ -436,11 +394,6 @@ function _restoreScene(snap) {
     }
 
     const restorePromises = snap.objects.map(s => {
-        if (s.isAudioSource) {
-            return import('./engine.audio.js').then(({ createAudioSource }) => {
-                createAudioSource(s.assetId, s.x, s.y, s.audioProps, s.label);
-            });
-        }
         if (s.isLight) {
             return import('./engine.lights.js').then(({ createLight, _buildLightHelper }) => {
                 const obj = createLight(s.lightType, s.x, s.y);
@@ -519,12 +472,6 @@ function _logConsole(msg,color='#e0e0e0'){
 export function startRuntimeAnimations() {
     for (const obj of state.gameObjects) {
         if (obj.isLight) { obj.visible = false; continue; }
-        if (obj.isAudioSource) {
-            // Hide audio source gizmo in play mode
-            if (obj._gizmoContainer) obj._gizmoContainer.visible = false;
-            obj.visible = false;  // the container itself is invisible
-            continue;
-        }
         if (obj.isTilemap) {
             // Keep tile sprites visible, rebuild from data now
             obj.visible = true;
@@ -553,8 +500,6 @@ export function stopRuntimeAnimations() {
         if (obj.isLight && obj._lightHelper) obj._lightHelper.visible = true;
         if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = true;
         if (obj.isAutoTilemap && obj._autoTileHelper) obj._autoTileHelper.visible = true;
-        // Restore audio source gizmos
-        if (obj.isAudioSource && obj._gizmoContainer) obj._gizmoContainer.visible = true;
     }
 }
 
@@ -579,8 +524,8 @@ function _startCulling() {
         _updateSceneMask();
 
         const sc  = state.sceneContainer;
-        const hw  = _gameW() / 2;
-        const hh  = _gameH() / 2;
+        const hw  = GAME_WIDTH  / 2;
+        const hh  = GAME_HEIGHT / 2;
         const camLeft   = sc.x - hw * sc.scale.x;
         const camRight  = sc.x + hw * sc.scale.x;
         const camTop    = sc.y - hh * sc.scale.y;
@@ -603,10 +548,10 @@ function _startCulling() {
 function _updateSceneMask() {
     if (!_sceneMask || !state.sceneContainer) return;
     const sc = state.sceneContainer;
-    const x  = sc.x - (_gameW() / 2) * sc.scale.x;
-    const y  = sc.y - (_gameH() / 2) * sc.scale.y;
-    const w  = _gameW() * sc.scale.x;
-    const h  = _gameH() * sc.scale.y;
+    const x  = sc.x - (GAME_WIDTH  / 2) * sc.scale.x;
+    const y  = sc.y - (GAME_HEIGHT / 2) * sc.scale.y;
+    const w  = GAME_WIDTH  * sc.scale.x;
+    const h  = GAME_HEIGHT * sc.scale.y;
     _sceneMask.clear();
     _sceneMask.beginFill(0xFFFFFF, 1);
     _sceneMask.drawRect(x, y, w, h);

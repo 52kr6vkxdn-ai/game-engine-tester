@@ -231,11 +231,11 @@
         <!-- Object header -->
         <div class="inspector-obj-header">
             <input type="checkbox" id="obj-active-checkbox" checked class="obj-checkbox">
-            <input type="text" id="inp-obj-name" class="obj-name-input" value="" placeholder="Scene Settings">
+            <input type="text" id="inp-obj-name" class="obj-name-input" value="" placeholder="No Selection">
         </div>
 
         <!-- Transform -->
-        <div class="component-block" id="inspector-transform-section" style="display:none;">
+        <div class="component-block" id="inspector-transform-section">
             <div class="component-header">
                 <svg viewBox="0 0 24 24" class="comp-icon"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
                 <span>Transform</span>
@@ -266,7 +266,7 @@
         </div>
 
         <!-- Sprite Renderer -->
-        <div class="component-block" id="inspector-sprite-section" style="display:none;">
+        <div class="component-block" id="inspector-sprite-section">
             <div class="component-header">
                 <input type="checkbox" checked class="comp-toggle">
                 <svg viewBox="0 0 24 24" class="comp-icon"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -281,7 +281,7 @@
         </div>
 
         <!-- Animator -->
-        <div class="component-block" id="inspector-anim-section" style="display:none;">
+        <div class="component-block" id="inspector-anim-section">
             <div class="component-header">
                 <svg viewBox="0 0 24 24" class="comp-icon"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M8 4v16M2 9h6M2 15h6"/></svg>
                 <span>Animator</span>
@@ -292,32 +292,6 @@
                     <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                     Edit Animations
                 </button>
-            </div>
-        </div>
-
-        <!-- Scene Settings (shown when nothing is selected) -->
-        <div id="inspector-scene-settings">
-            <div class="component-block" style="border-left:3px solid #555;">
-                <div class="component-header" style="background:#1a1a20;">
-                    <svg viewBox="0 0 24 24" class="comp-icon"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-                    <span style="color:#ccd;font-weight:600;">Scene Settings</span>
-                </div>
-                <div class="component-body">
-                    <div class="prop-row"><span class="prop-label">Background</span><input type="color" id="scene-bg-color" value="#282828" style="width:48px;height:22px;border:none;border-radius:3px;cursor:pointer;background:none;"></div>
-                    <div class="prop-row"><span class="prop-label">Width</span><input type="number" id="scene-width" value="1280" min="100" max="7680" style="flex:1;background:#16161e;border:1px solid #2a3a48;color:#fff;border-radius:3px;padding:2px 6px;font-size:11px;"><span style="color:#555;font-size:10px;margin-left:4px;">px</span></div>
-                    <div class="prop-row"><span class="prop-label">Height</span><input type="number" id="scene-height" value="720" min="100" max="4320" style="flex:1;background:#16161e;border:1px solid #2a3a48;color:#fff;border-radius:3px;padding:2px 6px;font-size:11px;"><span style="color:#555;font-size:10px;margin-left:4px;">px</span></div>
-                    <div class="prop-row"><span class="prop-label" style="white-space:nowrap;">Camera Mode</span><select id="scene-camera-mode" style="flex:1;background:#16161e;border:1px solid #2a3a48;color:#ccc;border-radius:3px;padding:2px 4px;font-size:11px;"><option value="landscape" selected>Landscape (Desktop)</option><option value="portrait">Portrait (Mobile)</option><option value="adaptive">Adaptive (Auto-rotate)</option><option value="auto">Fill Screen (No bars)</option></select></div>
-                    <div id="scene-camera-mode-hint" style="font-size:10px;color:#666;padding:4px 0 2px;line-height:1.5;">Pillarboxes on tall screens. Ideal for desktop games.</div>
-                    <div class="prop-row" style="margin-top:4px;"><span class="prop-label">Ratio</span><span id="scene-ratio-display" style="color:#9bc;font-size:10px;font-family:monospace;">16:9  (1280×720)</span></div>
-                    <div style="display:flex;gap:4px;margin-top:8px;flex-wrap:wrap;">
-                        <button class="scene-preset-btn" data-w="1920" data-h="1080">1920×1080</button>
-                        <button class="scene-preset-btn" data-w="1280" data-h="720">1280×720</button>
-                        <button class="scene-preset-btn" data-w="1366" data-h="768">1366×768</button>
-                        <button class="scene-preset-btn" data-w="1080" data-h="1920">1080×1920</button>
-                        <button class="scene-preset-btn" data-w="720"  data-h="1280">720×1280</button>
-                        <button class="scene-preset-btn" data-w="2560" data-h="1440">2560×1440</button>
-                    </div>
-                </div>
             </div>
         </div>
 
@@ -366,7 +340,7 @@
 <script type="module">
 import { startEngine } from './engine.core.js';
 
-document.addEventListener('DOMContentLoaded', () => {
+window.onload = () => {
     startEngine();
 
     // Tab switching

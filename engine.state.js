@@ -73,21 +73,6 @@ export const state = {
     /** @type {number} Index into state.scenes */
     activeSceneIndex: 0,
 
-    // ── Scene Settings (per-scene camera / display config) ─
-    /**
-     * cameraMode: 'auto' | 'landscape' | 'portrait' | 'adaptive'
-     *   auto      — fills viewport, no black bars (crop)
-     *   landscape — fixed ratio 16:9, letterbox on portrait screens
-     *   portrait  — fixed ratio 9:16, letterbox on landscape screens
-     *   adaptive  — maintains chosen width×height aspect, but auto-rotates on mobile
-     */
-    sceneSettings: {
-        bgColor:    0x282828,
-        width:      1280,
-        height:     720,
-        cameraMode: 'landscape',
-    },
-
     // ── Internal gizmo binding ────────────────────────────
     _gizmoHandles: null,
 

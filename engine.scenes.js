@@ -88,15 +88,6 @@ function _saveCurrentScene() {
     if (!scene) return;
 
     const objectSnapshots = state.gameObjects.map(obj => {
-        if (obj.isAudioSource) {
-            return {
-                isAudioSource: true,
-                label:     obj.label,
-                assetId:   obj.assetId,
-                x: obj.x, y: obj.y, unityZ: obj.unityZ || 0,
-                audioProps: JSON.parse(JSON.stringify(obj.audioProps || {})),
-            };
-        }
         if (obj.isLight) {
             return {
                 isLight: true, lightType: obj.lightType,
@@ -192,11 +183,6 @@ function _loadScene(index) {
 
     if (snap?.objects?.length) {
         const restoreAll = snap.objects.map(s => {
-            if (s.isAudioSource) {
-                return import('./engine.audio.js').then(({ createAudioSource }) => {
-                    createAudioSource(s.assetId, s.x, s.y, s.audioProps, s.label);
-                });
-            }
             if (s.isLight) {
                 return import('./engine.lights.js').then(({ createLight, _buildLightHelper }) => {
                     const obj = createLight(s.lightType, s.x, s.y);

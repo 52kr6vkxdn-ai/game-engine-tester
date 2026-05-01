@@ -7,7 +7,7 @@ import { state, PIXELS_PER_UNIT } from './engine.state.js';
 
 let els = null;
 
-// ── Cache DOM ──────────────────────────────────────────────────
+// ── Cache DOM ─────────────────────────────────────────────────
 export function cacheInspectorElements() {
     els = {
         px: document.getElementById('inp-pos-x'),
@@ -28,111 +28,102 @@ export function cacheInspectorElements() {
     };
 }
 
-// ── Show/hide inspector sections ──────────────────────────────
-function _showSections(flags) {
-    const ids = {
-        transform: 'inspector-transform-section',
-        sprite:    'inspector-sprite-section',
-        anim:      'inspector-anim-section',
-        prefab:    'inspector-prefab-section',
-        light:     'light-inspector-mount',
-        scene:     'inspector-scene-settings',
-    };
-    for (const [key, id] of Object.entries(ids)) {
-        const el = document.getElementById(id);
-        if (el) el.style.display = (flags[key] ?? false) ? '' : 'none';
-    }
-    // Also reset rot/scale rows
-    const rotRow   = document.getElementById('transform-rot-row');
-    const scaleRow = document.getElementById('transform-scale-row');
-    if (rotRow)   rotRow.style.display   = (flags.rotRow   ?? true) ? '' : 'none';
-    if (scaleRow) scaleRow.style.display = (flags.scaleRow ?? true) ? '' : 'none';
-}
-
-// ── PIXI → Inspector ──────────────────────────────────────────
+// ── PIXI → Inspector ─────────────────────────────────────────
 export function syncPixiToInspector() {
     if (!els) return;
     const go = state.gameObject;
 
-    // ── No selection → Scene Settings ────────────────────
+    // Light section toggle
+    const lightSection = document.getElementById('inspector-light-section');
+    const spriteSection = document.getElementById('inspector-sprite-section');
+    const animSection   = document.getElementById('inspector-anim-section');
+    const pfSection     = document.getElementById('inspector-prefab-section');
+    const transformSection = document.getElementById('inspector-transform-section');
+
     if (!go) {
-        _showSections({ scene: true });
-        if (els.objName) { els.objName.value = ''; els.objName.placeholder = 'Scene Settings'; }
-        syncSceneSettingsToUI();
+        ['px','py','pz','rz','sx','sy'].forEach(k => { if(els[k]) els[k].value = ''; });
+        if (els.objName) els.objName.value = '';
+        if (pfSection) pfSection.style.display = 'none';
+        if (lightSection) lightSection.style.display = 'none';
         return;
     }
-
-    // Hide scene settings
-    _showSections({ transform: false, sprite: false, anim: false, light: false, scene: false });
 
     if (els.objName) els.objName.value = go.label || '';
     els.px.value = (go.x  /  PIXELS_PER_UNIT).toFixed(2);
     els.py.value = (-go.y /  PIXELS_PER_UNIT).toFixed(2);
     els.pz.value = (go.unityZ || 0).toFixed(2);
 
-    // ── AudioSource ───────────────────────────────────────
-    if (go.isAudioSource) {
-        _showSections({ transform: true, rotRow: false, scaleRow: false });
-        const mount = document.getElementById('light-inspector-mount');
-        if (mount) {
-            mount.style.display = '';
-            import('./engine.audio.js').then(m => {
-                mount.innerHTML = m.buildAudioSourceInspectorHTML(go);
-                m.bindAudioSourceInspector(go);
-            });
-        }
-        return;
-    }
-
-    // ── Light ─────────────────────────────────────────────
     if (go.isLight) {
-        _showSections({ transform: true, rotRow: false, scaleRow: false });
-        const mount = document.getElementById('light-inspector-mount');
-        if (mount) {
-            mount.style.display = '';
+        // Hide transform rotation/scale rows for lights
+        const rotRow   = document.getElementById('transform-rot-row');
+        const scaleRow = document.getElementById('transform-scale-row');
+        if (rotRow)   rotRow.style.display   = 'none';
+        if (scaleRow) scaleRow.style.display = 'none';
+        if (spriteSection) spriteSection.style.display = 'none';
+        if (animSection)   animSection.style.display   = 'none';
+        if (pfSection)     pfSection.style.display      = 'none';
+        const lightMount = document.getElementById('light-inspector-mount');
+        if (lightMount) {
             import('./engine.lights.js').then(m => {
-                mount.innerHTML = m.buildLightInspectorHTML(go);
+                lightMount.innerHTML = m.buildLightInspectorHTML(go);
                 m.bindLightInspector(go);
             });
         }
         return;
     }
 
-    // ── Tilemap ───────────────────────────────────────────
     if (go.isTilemap) {
-        _showSections({ transform: true, rotRow: false, scaleRow: false });
-        const mount = document.getElementById('light-inspector-mount');
-        if (mount) {
-            mount.style.display = '';
+        const rotRow   = document.getElementById('transform-rot-row');
+        const scaleRow = document.getElementById('transform-scale-row');
+        if (rotRow)   rotRow.style.display   = 'none';
+        if (scaleRow) scaleRow.style.display = 'none';
+        if (spriteSection) spriteSection.style.display = 'none';
+        if (animSection)   animSection.style.display   = 'none';
+        if (pfSection)     pfSection.style.display      = 'none';
+        const lightMount = document.getElementById('light-inspector-mount');
+        if (lightMount) {
             import('./engine.tilemap.js').then(m => {
-                mount.innerHTML = m.buildTilemapInspectorHTML(go);
-                document.getElementById('btn-open-tilemap-editor')?.addEventListener('click', () => m.openTilemapEditor(go));
+                lightMount.innerHTML = m.buildTilemapInspectorHTML(go);
+                document.getElementById('btn-open-tilemap-editor')?.addEventListener('click', () => {
+                    m.openTilemapEditor(go);
+                });
             });
         }
         return;
     }
 
-    // ── AutoTilemap ───────────────────────────────────────
     if (go.isAutoTilemap) {
-        _showSections({ transform: true, rotRow: false, scaleRow: false });
-        const mount = document.getElementById('light-inspector-mount');
-        if (mount) {
-            mount.style.display = '';
+        const rotRow   = document.getElementById('transform-rot-row');
+        const scaleRow = document.getElementById('transform-scale-row');
+        if (rotRow)   rotRow.style.display   = 'none';
+        if (scaleRow) scaleRow.style.display = 'none';
+        if (spriteSection) spriteSection.style.display = 'none';
+        if (animSection)   animSection.style.display   = 'none';
+        if (pfSection)     pfSection.style.display      = 'none';
+        const lightMount = document.getElementById('light-inspector-mount');
+        if (lightMount) {
             import('./engine.autotile.js').then(m => {
-                mount.innerHTML = m.buildAutoTileInspectorHTML(go);
-                document.getElementById('btn-open-autotile-editor')?.addEventListener('click', () => m.openAutoTileEditor(go));
+                lightMount.innerHTML = m.buildAutoTileInspectorHTML(go);
+                document.getElementById('btn-open-autotile-editor')?.addEventListener('click', () => {
+                    m.openAutoTileEditor(go);
+                });
             });
         }
         return;
     }
 
-    // ── Regular sprite ────────────────────────────────────
-    _showSections({ transform: true, sprite: true, anim: true, light: true });
-    const mount = document.getElementById('light-inspector-mount');
-    if (mount) {
-        mount.style.display = '';
+    // Regular sprite object
+    const rotRow   = document.getElementById('transform-rot-row');
+    const scaleRow = document.getElementById('transform-scale-row');
+    if (rotRow)   rotRow.style.display   = '';
+    if (scaleRow) scaleRow.style.display = '';
+    if (spriteSection) spriteSection.style.display = '';
+    if (animSection)   animSection.style.display   = '';
+    const lightMount = document.getElementById('light-inspector-mount');
+    if (lightMount) {
+        // Inject physics inspector at bottom of lightMount
         import('./engine.physics.js').then(m => {
-            mount.innerHTML = m.buildPhysicsInspectorHTML(go);
+            lightMount.innerHTML = m.buildPhysicsInspectorHTML(go);
             m.bindPhysicsInspector(go);
         });
     }
@@ -166,7 +157,6 @@ export function syncPixiToInspector() {
         }
     }
 
-    const pfSection = document.getElementById('inspector-prefab-section');
     if (pfSection) {
         if (go.prefabId) {
             const prefab = state.prefabs.find(p => p.id === go.prefabId);
@@ -185,13 +175,15 @@ export function syncInspectorToPixi() {
     const go = state.gameObject;
     if (!go) return;
 
+    // Position applies to both sprites and lights
     go.x      = (parseFloat(els.px.value) || 0) *  PIXELS_PER_UNIT;
     go.y      = (parseFloat(els.py.value) || 0) * -PIXELS_PER_UNIT;
     const newZ = parseFloat(els.pz.value) || 0;
     const zChanged = newZ !== (go.unityZ || 0);
     go.unityZ = newZ;
 
-    if (!go.isLight && !go.isTilemap && !go.isAutoTilemap && !go.isAudioSource) {
+    // Rotation and scale only for sprites (not lights or tilemaps)
+    if (!go.isLight && !go.isTilemap && !go.isAutoTilemap) {
         const newRot = (parseFloat(els.rz?.value) || 0) * -Math.PI / 180;
         const newSX  = parseFloat(els.sx?.value) || 1;
         const newSY  = parseFloat(els.sy?.value) || 1;
@@ -200,165 +192,28 @@ export function syncInspectorToPixi() {
         go.scale.y   = newSY;
     }
 
-    if (go.isAudioSource) {
-        import('./engine.audio.js').then(m => m._drawRangeCircle?.(go));
-    }
-
     if (zChanged) import('./engine.objects.js').then(m => m.sortByZ());
-
-    import('./engine.playmode.js').then(m => m.updateCameraBoundsIfVisible?.());
 }
-
-// ── Scene Settings → UI ───────────────────────────────────────
-export function syncSceneSettingsToUI() {
-    const el = document.getElementById('inspector-scene-settings');
-    if (!el) return;
-    const s = state.sceneSettings;
-    const bgHex = '#' + (s.bgColor & 0xFFFFFF).toString(16).padStart(6, '0');
-
-    el.innerHTML = `
-    <div class="component-block" style="border-left:3px solid #555;">
-        <div class="component-header" style="background:#1a1a20;">
-            <svg viewBox="0 0 24 24" class="comp-icon"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-            <span style="color:#ccd;font-weight:600;">Scene Settings</span>
-        </div>
-        <div class="component-body">
-            <div class="prop-row">
-                <span class="prop-label">Background</span>
-                <input type="color" id="scene-bg-color" value="${bgHex}" style="width:48px;height:22px;border:none;border-radius:3px;cursor:pointer;background:none;">
-            </div>
-            <div class="prop-row">
-                <span class="prop-label">Width</span>
-                <input type="number" id="scene-width" value="${s.width}" min="100" max="7680" step="1"
-                       style="flex:1;background:#16161e;border:1px solid #2a3a48;color:#fff;border-radius:3px;padding:2px 6px;font-size:11px;">
-                <span style="color:#555;font-size:10px;margin-left:4px;">px</span>
-            </div>
-            <div class="prop-row">
-                <span class="prop-label">Height</span>
-                <input type="number" id="scene-height" value="${s.height}" min="100" max="4320" step="1"
-                       style="flex:1;background:#16161e;border:1px solid #2a3a48;color:#fff;border-radius:3px;padding:2px 6px;font-size:11px;">
-                <span style="color:#555;font-size:10px;margin-left:4px;">px</span>
-            </div>
-            <div class="prop-row">
-                <span class="prop-label" style="white-space:nowrap;">Camera Mode</span>
-                <select id="scene-camera-mode" style="flex:1;background:#16161e;border:1px solid #2a3a48;color:#ccc;border-radius:3px;padding:2px 4px;font-size:11px;">
-                    <option value="landscape" ${s.cameraMode==='landscape'?'selected':''}>Landscape (Desktop)</option>
-                    <option value="portrait"  ${s.cameraMode==='portrait' ?'selected':''}>Portrait (Mobile)</option>
-                    <option value="adaptive"  ${s.cameraMode==='adaptive' ?'selected':''}>Adaptive (Auto-rotate)</option>
-                    <option value="auto"      ${s.cameraMode==='auto'     ?'selected':''}>Fill Screen (No bars)</option>
-                </select>
-            </div>
-            <div id="scene-camera-mode-hint" style="font-size:10px;color:#666;padding:4px 0 2px 0;line-height:1.5;"></div>
-            <div class="prop-row" style="margin-top:6px;">
-                <span class="prop-label">Ratio</span>
-                <span id="scene-ratio-display" style="color:#9bc;font-size:10px;font-family:monospace;"></span>
-            </div>
-            <div style="display:flex;gap:4px;margin-top:8px;flex-wrap:wrap;">
-                <button class="scene-preset-btn" data-w="1920" data-h="1080">1920×1080</button>
-                <button class="scene-preset-btn" data-w="1280" data-h="720">1280×720</button>
-                <button class="scene-preset-btn" data-w="1366" data-h="768">1366×768</button>
-                <button class="scene-preset-btn" data-w="1080" data-h="1920">1080×1920</button>
-                <button class="scene-preset-btn" data-w="720"  data-h="1280">720×1280</button>
-                <button class="scene-preset-btn" data-w="2560" data-h="1440">2560×1440</button>
-            </div>
-        </div>
-    </div>`;
-
-    _updateSceneModeHint();
-    _updateSceneRatioDisplay();
-
-    // Bind events
-    document.getElementById('scene-bg-color')?.addEventListener('input', (e) => {
-        const val = parseInt(e.target.value.replace('#',''), 16);
-        state.sceneSettings.bgColor = val;
-        if (state.app) state.app.renderer.background.color = val;
-        import('./engine.history.js').then(({ pushUndoDebounced }) => pushUndoDebounced());
-    });
-
-    const wInput = document.getElementById('scene-width');
-    const hInput = document.getElementById('scene-height');
-    wInput?.addEventListener('input', () => {
-        state.sceneSettings.width = parseInt(wInput.value) || 1280;
-        _updateSceneRatioDisplay();
-        import('./engine.renderer.js').then(m => m.drawGrid());
-        import('./engine.history.js').then(({ pushUndoDebounced }) => pushUndoDebounced());
-    });
-    hInput?.addEventListener('input', () => {
-        state.sceneSettings.height = parseInt(hInput.value) || 720;
-        _updateSceneRatioDisplay();
-        import('./engine.renderer.js').then(m => m.drawGrid());
-        import('./engine.history.js').then(({ pushUndoDebounced }) => pushUndoDebounced());
-    });
-
-    document.getElementById('scene-camera-mode')?.addEventListener('change', (e) => {
-        state.sceneSettings.cameraMode = e.target.value;
-        _updateSceneModeHint();
-        import('./engine.renderer.js').then(m => m.drawGrid());
-        import('./engine.history.js').then(({ pushUndo }) => pushUndo());
-    });
-
-    el.querySelectorAll('.scene-preset-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const w = parseInt(btn.dataset.w);
-            const h = parseInt(btn.dataset.h);
-            state.sceneSettings.width  = w;
-            state.sceneSettings.height = h;
-            const wEl = document.getElementById('scene-width');
-            const hEl = document.getElementById('scene-height');
-            if (wEl) wEl.value = w;
-            if (hEl) hEl.value = h;
-            // Auto-set mode based on orientation
-            if (w >= h && state.sceneSettings.cameraMode === 'portrait') {
-                state.sceneSettings.cameraMode = 'landscape';
-                const mEl = document.getElementById('scene-camera-mode');
-                if (mEl) mEl.value = 'landscape';
-            } else if (h > w && state.sceneSettings.cameraMode === 'landscape') {
-                state.sceneSettings.cameraMode = 'portrait';
-                const mEl = document.getElementById('scene-camera-mode');
-                if (mEl) mEl.value = 'portrait';
-            }
-            _updateSceneRatioDisplay();
-            _updateSceneModeHint();
-            import('./engine.renderer.js').then(m => m.drawGrid());
-            import('./engine.history.js').then(({ pushUndo }) => pushUndo());
-        });
-    });
-}
-
-function _updateSceneModeHint() {
-    const el = document.getElementById('scene-camera-mode-hint');
-    if (!el) return;
-    const hints = {
-        landscape: 'Pillarboxes on tall screens. Ideal for desktop games.',
-        portrait:  'Letterboxes on wide screens. Ideal for mobile portrait.',
-        adaptive:  'Maintains ratio; auto-rotates content on mobile. No black bars when orientation matches.',
-        auto:      'Always fills the screen — content may be cropped on mismatched screens.',
-    };
-    el.textContent = hints[state.sceneSettings.cameraMode] || '';
-}
-
-function _updateSceneRatioDisplay() {
-    const el = document.getElementById('scene-ratio-display');
-    if (!el) return;
-    const w = state.sceneSettings.width;
-    const h = state.sceneSettings.height;
-    const g = _gcd(w, h);
-    el.textContent = `${w/g}:${h/g}  (${w}×${h})`;
-}
-
-function _gcd(a, b) { return b === 0 ? a : _gcd(b, a % b); }
 
 // ── Instant prefab field propagation ─────────────────────────
+// Only TINT propagates live to all instances. Rotation and scale
+// are per-instance and never propagated automatically.
 function _propagatePrefabField(sourceObj, field, value) {
     if (!sourceObj?.prefabId) return;
-    if (field !== 'tint') return;
+    if (field !== 'tint') return;   // guard: only tint propagates
     const prefabId = sourceObj.prefabId;
+
+    // Update template tint
     const prefab = (state.prefabs || []).find(p => p.id === prefabId);
     if (prefab) prefab.tint = value;
+
+    // Update every OTHER live instance immediately
     for (const obj of state.gameObjects) {
         if (obj === sourceObj || obj.prefabId !== prefabId) continue;
         if (obj.spriteGraphic?.tint !== undefined) obj.spriteGraphic.tint = value;
     }
+
+    // Update scene snapshots (other scenes)
     for (const scene of (state.scenes || [])) {
         if (!scene.snapshot?.objects) continue;
         for (const s of scene.snapshot.objects) {
@@ -371,37 +226,29 @@ function _propagatePrefabField(sourceObj, field, value) {
 // ── Inspector Listeners ───────────────────────────────────────
 export function initInspectorListeners() {
     if (!els) return;
-
-    // Debounced undo: push undo 400ms after last number input change
     ['px','py','pz','rz','sx','sy'].forEach(k => {
-        if (!els[k]) return;
-        // Push an immediate snapshot BEFORE the first change in a series
-        els[k].addEventListener('focus', () => {
-            import('./engine.history.js').then(({ pushUndo }) => pushUndo());
-        });
-        els[k].addEventListener('input', () => {
-            syncInspectorToPixi();
-            import('./engine.history.js').then(({ pushUndoDebounced }) => pushUndoDebounced());
-        });
+        els[k].addEventListener('input', syncInspectorToPixi);
     });
 
-    els.color?.addEventListener('input', (e) => {
+    els.color.addEventListener('input', (e) => {
         const go = state.gameObject;
         if (!go) return;
-        const hexStr  = e.target.value.replace('#', '');
+        const hexStr = e.target.value.replace('#', '');
         const tintVal = parseInt(hexStr, 16);
         const sp = go.spriteGraphic;
-        if (sp && sp.tint !== undefined) sp.tint = tintVal;
+        if (sp && sp.tint !== undefined) {
+            sp.tint = tintVal;
+        }
+        // Instant prefab propagation — color updates all instances live
         _propagatePrefabField(go, 'tint', tintVal);
-        import('./engine.history.js').then(({ pushUndoDebounced }) => pushUndoDebounced());
     });
 
-    els.gizmoMode?.addEventListener('change', (e) => setGizmoMode(e.target.value));
+    els.gizmoMode.addEventListener('change', (e) => setGizmoMode(e.target.value));
 
-    els.btns.t?.addEventListener('click', () => setGizmoMode('translate'));
-    els.btns.r?.addEventListener('click', () => setGizmoMode('rotate'));
-    els.btns.s?.addEventListener('click', () => setGizmoMode('scale'));
-    els.btns.a?.addEventListener('click', () => setGizmoMode('all'));
+    els.btns.t.addEventListener('click', () => setGizmoMode('translate'));
+    els.btns.r.addEventListener('click', () => setGizmoMode('rotate'));
+    els.btns.s.addEventListener('click', () => setGizmoMode('scale'));
+    els.btns.a.addEventListener('click', () => setGizmoMode('all'));
 
     if (els.objName) {
         els.objName.addEventListener('change', (e) => {
@@ -417,7 +264,6 @@ export function initInspectorListeners() {
             }
             els.objName.value = state.gameObject.label;
             refreshHierarchy();
-            import('./engine.history.js').then(({ pushUndo }) => pushUndo());
         });
     }
 }
@@ -426,6 +272,7 @@ export function initInspectorListeners() {
 export function setGizmoMode(mode) {
     state.gizmoMode = mode;
 
+    // Apply to selected object only; lights always use translate-only gizmo
     for (const obj of state.gameObjects) {
         if (!obj._grpTranslate) continue;
         const isSelected = obj === state.gameObject;
@@ -433,7 +280,8 @@ export function setGizmoMode(mode) {
             obj._grpTranslate.visible = false;
             obj._grpRotate.visible    = false;
             obj._grpScale.visible     = false;
-        } else if (obj.isLight || obj.isAudioSource) {
+        } else if (obj.isLight) {
+            // Lights: translate always visible, no rotate/scale gizmo
             obj._grpTranslate.visible = true;
             obj._grpRotate.visible    = false;
             obj._grpScale.visible     = false;
@@ -445,11 +293,11 @@ export function setGizmoMode(mode) {
     }
 
     if (!els) return;
-    if (els.gizmoMode) els.gizmoMode.value = mode;
-    if (els.btns.t) els.btns.t.className = `tool-btn${mode === 'translate' ? ' active' : ''}`;
-    if (els.btns.r) els.btns.r.className = `tool-btn${mode === 'rotate'    ? ' active' : ''}`;
-    if (els.btns.s) els.btns.s.className = `tool-btn${mode === 'scale'     ? ' active' : ''}`;
-    if (els.btns.a) els.btns.a.className = `tool-btn${mode === 'all'       ? ' active' : ''}`;
+    els.gizmoMode.value = mode;
+    els.btns.t.className = `tool-btn${mode === 'translate' ? ' active' : ''}`;
+    els.btns.r.className = `tool-btn${mode === 'rotate'    ? ' active' : ''}`;
+    els.btns.s.className = `tool-btn${mode === 'scale'     ? ' active' : ''}`;
+    els.btns.a.className = `tool-btn${mode === 'all'       ? ' active' : ''}`;
 }
 
 // ── Hierarchy Panel ───────────────────────────────────────────
@@ -465,6 +313,7 @@ export function refreshHierarchy() {
         item.dataset.objId = state.gameObjects.indexOf(obj);
         item.style.cssText = 'display:flex; align-items:center; justify-content:space-between; padding: 3px 8px; cursor:pointer;';
 
+        // Name (double-click to rename)
         const nameEl = document.createElement('span');
         nameEl.className = 'tree-item-name';
         nameEl.textContent = obj.label || 'Object';
@@ -488,7 +337,6 @@ export function refreshHierarchy() {
                 }
                 refreshHierarchy();
                 if (obj === state.gameObject && els?.objName) els.objName.value = obj.label;
-                import('./engine.history.js').then(({ pushUndo }) => pushUndo());
             };
             inp.addEventListener('blur', commit);
             inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') inp.blur(); ev.stopPropagation(); });
@@ -497,13 +345,8 @@ export function refreshHierarchy() {
         const left = document.createElement('div');
         left.className = 'tree-item-left';
 
-        // Icon per type
-        if (obj.isAudioSource) {
-            const span = document.createElement('span');
-            span.style.cssText = 'font-size:12px;flex-shrink:0;';
-            span.textContent = '🔊';
-            left.appendChild(span);
-        } else if (obj.isLight) {
+        // Icon
+        if (obj.isLight) {
             const iconMap = { point:'💡', spot:'🔦', directional:'☀️', area:'▭' };
             const span = document.createElement('span');
             span.style.cssText = 'font-size:12px;flex-shrink:0;';
@@ -538,15 +381,6 @@ export function refreshHierarchy() {
             }
         }
         left.appendChild(nameEl);
-
-        // Badges
-        if (obj.isAudioSource) {
-            const badge = document.createElement('span');
-            badge.className = 'tree-item-light-badge';
-            badge.style.cssText = 'background:rgba(58,114,165,0.15);color:#9bc;border-color:rgba(58,114,165,0.4);';
-            badge.textContent = 'audio';
-            left.appendChild(badge);
-        }
         if (obj.isLight) {
             const badge = document.createElement('span');
             badge.className = 'tree-item-light-badge';
@@ -573,18 +407,17 @@ export function refreshHierarchy() {
         }
         item.appendChild(left);
 
-        // Z-order buttons (not for audio sources)
-        if (!obj.isAudioSource) {
-            const zBtns = document.createElement('div');
-            zBtns.style.cssText = 'display:flex;gap:2px;flex-shrink:0;';
-            const upBtn = _makeZBtn('↑', () => import('./engine.objects.js').then(m => m.moveObjectUp(obj)));
-            const dnBtn = _makeZBtn('↓', () => import('./engine.objects.js').then(m => m.moveObjectDown(obj)));
-            zBtns.appendChild(upBtn); zBtns.appendChild(dnBtn);
-            item.appendChild(zBtns);
-        }
+        // Z-order buttons
+        const zBtns = document.createElement('div');
+        zBtns.style.cssText = 'display:flex;gap:2px;flex-shrink:0;';
+        const upBtn = _makeZBtn('↑', () => import('./engine.objects.js').then(m => m.moveObjectUp(obj)));
+        const dnBtn = _makeZBtn('↓', () => import('./engine.objects.js').then(m => m.moveObjectDown(obj)));
+        zBtns.appendChild(upBtn); zBtns.appendChild(dnBtn);
+        item.appendChild(zBtns);
 
         item.addEventListener('click', () => import('./engine.objects.js').then(m => m.selectObject(obj)));
-        if (!obj.isLight && !obj.isAudioSource) {
+        // Double-click: open animation editor for sprites, not for lights
+        if (!obj.isLight) {
             item.addEventListener('dblclick', () => {
                 import('./engine.objects.js').then(m => m.selectObject(obj));
                 import('./engine.animator.js').then(m => m.openAnimationEditor(obj));
@@ -613,7 +446,7 @@ function _makeZBtn(label, cb) {
 }
 
 // ── Asset Panel ───────────────────────────────────────────────
-let _assetFilter = 'all';
+let _assetFilter = 'all'; // 'all' | 'sprite' | 'audio'
 
 export function setAssetFilter(filter) {
     _assetFilter = filter;
@@ -660,19 +493,36 @@ export function refreshAssetPanel() {
             e.dataTransfer.effectAllowed = 'copy';
         });
 
+        if (asset.type === 'audio') {
+            item.addEventListener('click', () => _showAudioInspector(asset));
+        }
+
         grid.appendChild(item);
     }
 
     if (filtered.length === 0) {
         const empty = document.createElement('div');
         empty.style.cssText = 'color:#505060;font-size:11px;padding:16px;font-style:italic;text-align:center;width:100%;';
-        empty.textContent = _assetFilter === 'audio' ? 'No audio imported — drag .mp3 .wav .ogg here or use Import' : 'Import assets to get started';
+        empty.textContent = _assetFilter === 'audio' ? 'No audio imported' : 'Import assets to get started';
         grid.appendChild(empty);
     }
 }
 
+function _showAudioInspector(asset) {
+    // Show a toast notification since audio-inspector-bar is removed
+    const existing = document.getElementById('audio-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.id = 'audio-toast';
+    toast.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#1a1a24;border:1px solid #3a3a48;color:#d8d8e8;border-radius:6px;padding:8px 16px;font-size:11px;z-index:9999;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(0,0,0,0.6);';
+    toast.innerHTML = `<svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:#3A72A5;stroke-width:2;flex-shrink:0;"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span>${asset.name}</span><button onclick="document.getElementById('audio-toast')?.remove()" style="background:none;border:none;color:#666;cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button>`;
+    document.body.appendChild(toast);
+    setTimeout(() => toast?.remove(), 3000);
+}
+
 // ── Prefab Panel ──────────────────────────────────────────────
 export function refreshPrefabPanel() {
+    // Delegate to the canonical implementation in engine.prefabs.js
     import('./engine.prefabs.js').then(m => m.refreshPrefabPanel());
 }
 
@@ -681,8 +531,10 @@ export function initSceneDrop() {
     const container = document.getElementById('pixi-container');
     if (!container) return;
 
+    // Visual feedback when dragging prefab/asset over scene
     container.addEventListener('dragenter', (e) => {
-        if (e.dataTransfer.types.length) {
+        const hasPrefab = e.dataTransfer.types.includes('prefabid') || e.dataTransfer.types.includes('assetid');
+        if (hasPrefab || e.dataTransfer.types.length) {
             container.style.outline = '2px dashed #3A72A5';
             container.style.outlineOffset = '-2px';
         }
@@ -693,6 +545,7 @@ export function initSceneDrop() {
             container.style.outlineOffset = '';
         }
     });
+
     container.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
 
     container.addEventListener('drop', (e) => {
@@ -700,13 +553,14 @@ export function initSceneDrop() {
         container.style.outline = '';
         container.style.outlineOffset = '';
 
+        // Convert page coords → scene-local coords
         const rect   = container.getBoundingClientRect();
         const px     = e.clientX - rect.left;
         const py     = e.clientY - rect.top;
         const global = new PIXI.Point(px, py);
         const local  = state.sceneContainer.toLocal(global);
 
-        // ── Prefab drop ──────────────────────────────────
+        // ── Prefab drop ──────────────────────────────────────
         const prefabId = e.dataTransfer.getData('prefabId');
         if (prefabId) {
             const prefab = state.prefabs.find(p => p.id === prefabId);
@@ -717,20 +571,12 @@ export function initSceneDrop() {
             return;
         }
 
-        // ── Asset drop ────────────────────────────────────
+        // ── Asset drop (image only — skip audio) ─────────────
         const assetId = e.dataTransfer.getData('assetId');
         if (!assetId) return;
         const asset = state.assets.find(a => a.id === assetId);
-        if (!asset || !state.app) return;
+        if (!asset || !state.app || asset.type === 'audio') return;
 
-        if (asset.type === 'audio') {
-            // Create a 3D audio source in the scene
-            import('./engine.history.js').then(({ pushUndo }) => pushUndo());
-            import('./engine.audio.js').then(m => m.createAudioSource(asset.id, local.x, local.y));
-            return;
-        }
-
-        // Image drop
         import('./engine.objects.js').then(m => {
             const obj = m.createImageObject(asset, local.x, local.y);
             if (obj && state._bindGizmoHandles) state._bindGizmoHandles(obj);
