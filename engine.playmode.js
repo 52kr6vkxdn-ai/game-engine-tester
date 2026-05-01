@@ -1,6 +1,10 @@
 /* Zengine — engine.playmode.js v3 */
 import { state } from './engine.state.js';
 
+// Dynamic resolution from scene settings
+export function getGameWidth()  { return state.sceneSettings?.gameWidth  ?? 1280; }
+export function getGameHeight() { return state.sceneSettings?.gameHeight ?? 720;  }
+// Keep legacy exports for any existing imports
 export const GAME_WIDTH  = 1280;
 export const GAME_HEIGHT = 720;
 
@@ -20,6 +24,8 @@ export function enterPlayMode() {
     import('./engine.playmode.js').then(m => m.startRuntimeAnimations());
     // Start physics simulation
     import('./engine.physics.js').then(m => m.startPhysics());
+    // Start 3D positional audio
+    import('./engine.audio.js').then(m => m.startPlayAudio());
     _logConsole('▶ Play Mode — Space or ■ to stop', '#4ade80');
 }
 
@@ -49,6 +55,8 @@ export function stopPlayMode() {
     stopRuntimeAnimations();
     // Stop physics
     import('./engine.physics.js').then(m => m.stopPhysics());
+    // Stop 3D positional audio
+    import('./engine.audio.js').then(m => m.stopPlayAudio());
     _blockEditorInput(false);    // restore input
     _showEditorUI();
     // Store snapshot ref now — _restoreScene will clear state._playSnapshot
@@ -67,6 +75,17 @@ export function drawCameraBounds() {
     const pixiEl = document.getElementById('pixi-container');
     if (!pixiEl || !state.app) return;
 
+    const gw = getGameWidth();
+    const gh = getGameHeight();
+    const preset = state.sceneSettings?.cameraPreset || 'landscape-desktop';
+
+    const presetLabel = {
+        'landscape-desktop': 'Desktop 16:9',
+        'landscape-both':    'Desktop+Android',
+        'portrait':          'Portrait 9:16',
+        'automatic':         'Auto',
+    }[preset] || '';
+
     const bounds = document.createElement('div');
     bounds.id = 'camera-bounds-overlay';
     bounds.style.cssText = 'position:absolute;pointer-events:none;z-index:10;border:2px solid rgba(255,200,60,0.7);border-radius:1px;';
@@ -76,7 +95,7 @@ export function drawCameraBounds() {
 
     const lbl = document.createElement('div');
     lbl.style.cssText = 'position:absolute;top:-18px;left:0;color:rgba(255,200,60,0.8);font-size:9px;font-family:monospace;pointer-events:none;white-space:nowrap;';
-    lbl.textContent = `CAMERA  ${GAME_WIDTH} × ${GAME_HEIGHT}`;
+    lbl.textContent = `CAMERA  ${gw} × ${gh}  [${presetLabel}]`;
     bounds.appendChild(lbl);
 
     // Corner decorations
@@ -94,10 +113,12 @@ export function drawCameraBounds() {
 function _positionCameraBounds(el) {
     if (!state.sceneContainer) return;
     const sc  = state.sceneContainer;
-    const tlx = sc.x + (-GAME_WIDTH/2) * sc.scale.x;
-    const tly = sc.y + (-GAME_HEIGHT/2) * sc.scale.y;
-    const w   = GAME_WIDTH  * sc.scale.x;
-    const h   = GAME_HEIGHT * sc.scale.y;
+    const gw  = getGameWidth();
+    const gh  = getGameHeight();
+    const tlx = sc.x + (-gw/2) * sc.scale.x;
+    const tly = sc.y + (-gh/2) * sc.scale.y;
+    const w   = gw * sc.scale.x;
+    const h   = gh * sc.scale.y;
     el.style.left   = tlx + 'px';
     el.style.top    = tly + 'px';
     el.style.width  = w + 'px';
@@ -118,17 +139,36 @@ function _expandCanvasGameCamera() {
     el.style.cssText = 'position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:9000!important;background:#000;';
 
     if (state.app && state.sceneContainer) {
-        const sw = window.innerWidth;
-        const sh = window.innerHeight;
+        const sw     = window.innerWidth;
+        const sh     = window.innerHeight;
+        const preset = state.sceneSettings?.cameraPreset || 'landscape-desktop';
+
         state.app.renderer.resize(sw, sh);
 
-        // Snap to game camera: center world-origin at screen center,
-        // scale so GAME_WIDTH/HEIGHT fits the screen (letterbox)
-        const scaleX = sw / GAME_WIDTH;
-        const scaleY = sh / GAME_HEIGHT;
-        const gameCamScale = Math.min(scaleX, scaleY); // letterbox
+        let gw = getGameWidth();
+        let gh = getGameHeight();
 
-        state.sceneContainer.scale.set(gameCamScale);
+        if (preset === 'automatic') {
+            // Adapt: if device is portrait use portrait dims, else use landscape dims
+            const isPortrait = sh > sw;
+            if (isPortrait) {
+                // Ensure game dims are portrait
+                if (gw > gh) { const t = gw; gw = gh; gh = t; }
+            } else {
+                // Ensure game dims are landscape
+                if (gh > gw) { const t = gw; gw = gh; gh = t; }
+            }
+            // Fill: scale to cover (no black bars, may crop)
+            const gameCamScale = Math.max(sw / gw, sh / gh);
+            state.sceneContainer.scale.set(gameCamScale);
+        } else {
+            // Letterbox: fit inside screen, preserving aspect ratio
+            const scaleX = sw / gw;
+            const scaleY = sh / gh;
+            const gameCamScale = Math.min(scaleX, scaleY);
+            state.sceneContainer.scale.set(gameCamScale);
+        }
+
         state.sceneContainer.x = sw / 2;
         state.sceneContainer.y = sh / 2;
     }
@@ -276,7 +316,7 @@ function _showPlayOverlay() {
     const res = document.createElement('div');
     res.id = 'play-res-label';
     res.style.cssText = 'position:fixed;bottom:14px;left:18px;z-index:9999;color:rgba(255,255,255,0.2);font-family:monospace;font-size:10px;pointer-events:none;';
-    res.textContent = `${GAME_WIDTH}×${GAME_HEIGHT}  ·  PREVIEW MODE`;
+    res.textContent = `${getGameWidth()}×${getGameHeight()}  ·  PREVIEW MODE`;
     document.body.appendChild(res);
 }
 
@@ -522,10 +562,12 @@ function _startCulling() {
     _cullTicker = () => {
         if (!state.isPlaying || !state.app || !state.sceneContainer) return;
         _updateSceneMask();
+        // Update 3D audio listener position every frame
+        import('./engine.audio.js').then(m => m.updateAudioListener());
 
         const sc  = state.sceneContainer;
-        const hw  = GAME_WIDTH  / 2;
-        const hh  = GAME_HEIGHT / 2;
+        const hw  = getGameWidth()  / 2;
+        const hh  = getGameHeight() / 2;
         const camLeft   = sc.x - hw * sc.scale.x;
         const camRight  = sc.x + hw * sc.scale.x;
         const camTop    = sc.y - hh * sc.scale.y;
@@ -548,10 +590,12 @@ function _startCulling() {
 function _updateSceneMask() {
     if (!_sceneMask || !state.sceneContainer) return;
     const sc = state.sceneContainer;
-    const x  = sc.x - (GAME_WIDTH  / 2) * sc.scale.x;
-    const y  = sc.y - (GAME_HEIGHT / 2) * sc.scale.y;
-    const w  = GAME_WIDTH  * sc.scale.x;
-    const h  = GAME_HEIGHT * sc.scale.y;
+    const gw = getGameWidth();
+    const gh = getGameHeight();
+    const x  = sc.x - (gw / 2) * sc.scale.x;
+    const y  = sc.y - (gh / 2) * sc.scale.y;
+    const w  = gw * sc.scale.x;
+    const h  = gh * sc.scale.y;
     _sceneMask.clear();
     _sceneMask.beginFill(0xFFFFFF, 1);
     _sceneMask.drawRect(x, y, w, h);

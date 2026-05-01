@@ -76,6 +76,11 @@ export function newProject() {
     state.prefabs        = [];
     state.scenes         = [{ id: 'scene_1', name: 'Scene-1', snapshot: null }];
     state.activeSceneIndex = 0;
+    // Clear audio sources
+    import('./engine.audio.js').then(m => m.clearAudioSources());
+    // Reset scene settings
+    state.sceneSettings = { bgColor: 0x282828, gameWidth: 1280, gameHeight: 720, cameraPreset: 'landscape-desktop' };
+    if (state.app?.renderer) state.app.renderer.background.color = state.sceneSettings.bgColor;
 
     import('./engine.renderer.js').then(m => m.drawGrid());
     import('./engine.ui.js').then(m => {
@@ -103,6 +108,9 @@ function _applyProject(project) {
     state.gameObjects    = [];
     state.gameObject     = null;
     state.gizmoContainer = null;
+
+    // Clear audio sources from old scene
+    import('./engine.audio.js').then(m => m.clearAudioSources());
 
     // Restore globals
     state.assets         = project.assets  || [];
@@ -185,10 +193,15 @@ function _saveActiveScene() {
                 alpha:   obj.alpha   ?? 1,
             };
         }),
-        camX:      state.sceneContainer?.x       ?? 0,
-        camY:      state.sceneContainer?.y       ?? 0,
-        camScaleX: state.sceneContainer?.scale.x ?? 1,
-        camScaleY: state.sceneContainer?.scale.y ?? 1,
+        camX:         state.sceneContainer?.x       ?? 0,
+        camY:         state.sceneContainer?.y       ?? 0,
+        camScaleX:    state.sceneContainer?.scale.x ?? 1,
+        camScaleY:    state.sceneContainer?.scale.y ?? 1,
+        audioSources: state.audioSources.map(s => ({
+            id: s.id, assetId: s.assetId, label: s.label,
+            x: s.x, y: s.y, range: s.range, volume: s.volume, loop: s.loop,
+        })),
+        sceneSettings: JSON.parse(JSON.stringify(state.sceneSettings)),
     };
 }
 

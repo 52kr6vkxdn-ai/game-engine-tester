@@ -97,4 +97,21 @@ export const state = {
     // ── Collision overlay visibility ──────────────────────
     /** Whether collision shapes are drawn in the editor viewport */
     showCollision: false,
+
+    // ── Scene Settings ────────────────────────────────────
+    sceneSettings: {
+        bgColor:       0x282828,
+        gameWidth:     1280,
+        gameHeight:    720,
+        /** 'landscape-desktop' | 'landscape-both' | 'portrait' | 'automatic' */
+        cameraPreset:  'landscape-desktop',
+    },
+
+    // ── Audio Sources (positional, in-scene) ──────────────
+    /**
+     * @type {Array<{id:string, assetId:string, label:string,
+     *   x:number, y:number, range:number, volume:number, loop:boolean,
+     *   _container:PIXI.Container|null}>}
+     */
+    audioSources: [],
 };

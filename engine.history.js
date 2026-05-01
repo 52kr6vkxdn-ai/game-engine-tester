@@ -1,14 +1,15 @@
 /* ============================================================
    Zengine — engine.history.js
-   Undo / Redo support via full scene snapshots.
-   Push a snapshot before any destructive edit; pop to undo.
+   Undo / Redo via granular scene snapshots.
+   Tracks: object create/delete, number input changes,
+   audio source changes, and scene setting changes.
    ============================================================ */
 
 import { state } from './engine.state.js';
 
-const MAX_HISTORY = 30;
+const MAX_HISTORY = 50;
 
-// ── Capture current scene state ──────────────────────────────
+// ── Capture full scene ────────────────────────────────────────
 function _captureScene() {
     return {
         objects: state.gameObjects.map(obj => {
@@ -35,11 +36,17 @@ function _captureScene() {
                 activeAnimIndex: obj.activeAnimIndex || 0,
             };
         }),
+        audioSources: state.audioSources.map(s => ({
+            id: s.id, assetId: s.assetId, label: s.label,
+            x: s.x, y: s.y, range: s.range, volume: s.volume, loop: s.loop,
+        })),
+        sceneSettings: JSON.parse(JSON.stringify(state.sceneSettings)),
         camX:      state.sceneContainer?.x       ?? 0,
         camY:      state.sceneContainer?.y       ?? 0,
         camScaleX: state.sceneContainer?.scale.x ?? 1,
         camScaleY: state.sceneContainer?.scale.y ?? 1,
-        selectedLabel: state.gameObject?.label ?? null,
+        selectedLabel:     state.gameObject?.label ?? null,
+        selectedAudioId:   state._selectedAudioSource?.id ?? null,
     };
 }
 
@@ -49,16 +56,13 @@ export function pushUndo() {
     const snap = _captureScene();
     state.undoStack.push(snap);
     if (state.undoStack.length > MAX_HISTORY) state.undoStack.shift();
-    state.redoStack = []; // new edit clears redo
+    state.redoStack = [];
     _updateUndoButtons();
 }
 
 // ── Undo ─────────────────────────────────────────────────────
 export function undo() {
-    if (state.isPlaying) return;
-    if (state.undoStack.length === 0) return;
-
-    // Save current for redo
+    if (state.isPlaying || state.undoStack.length === 0) return;
     state.redoStack.push(_captureScene());
     const snap = state.undoStack.pop();
     _applyScene(snap);
@@ -67,20 +71,18 @@ export function undo() {
 
 // ── Redo ─────────────────────────────────────────────────────
 export function redo() {
-    if (state.isPlaying) return;
-    if (state.redoStack.length === 0) return;
-
+    if (state.isPlaying || state.redoStack.length === 0) return;
     state.undoStack.push(_captureScene());
     const snap = state.redoStack.pop();
     _applyScene(snap);
     _updateUndoButtons();
 }
 
-// ── Apply a snapshot to the live scene ───────────────────────
+// ── Apply snapshot ────────────────────────────────────────────
 function _applyScene(snap) {
     state._applyingHistory = true;
 
-    // Clear existing objects
+    // Clear objects
     for (const obj of state.gameObjects) {
         state.sceneContainer.removeChild(obj);
         try { obj.destroy({ children: true }); } catch (_) {}
@@ -102,11 +104,24 @@ function _applyScene(snap) {
         state.sceneContainer.scale.y = snap.camScaleY ?? 1;
     }
 
+    // Restore scene settings
+    if (snap.sceneSettings) {
+        Object.assign(state.sceneSettings, snap.sceneSettings);
+        import('./engine.ui.js').then(m => m.refreshSceneSettingsPanel());
+        _applyBgColor(state.sceneSettings.bgColor);
+        import('./engine.playmode.js').then(m => m.drawCameraBounds());
+    }
+
     // Rebuild grid
     import('./engine.renderer.js').then(m => m.drawGrid());
 
-    // Restore objects (sprites and lights)
-    const restoreAll = snap.objects.map(s => {
+    // Restore audio sources
+    import('./engine.audio.js').then(m => {
+        m.restoreAudioSources(snap.audioSources || []);
+    });
+
+    // Restore game objects
+    const restoreAll = (snap.objects || []).map(s => {
         if (s.isLight) {
             return import('./engine.lights.js').then(({ createLight, _buildLightHelper }) => {
                 const obj = createLight(s.lightType, s.x, s.y);
@@ -128,18 +143,32 @@ function _applyScene(snap) {
             obj.label = s.label; obj.scale.x = s.scaleX; obj.scale.y = s.scaleY;
             obj.rotation = s.rotation; obj.unityZ = s.unityZ; obj.prefabId = s.prefabId || null;
             if (obj.spriteGraphic?.tint !== undefined) obj.spriteGraphic.tint = s.tint;
-            if (s.animations?.length) { obj.animations = JSON.parse(JSON.stringify(s.animations)); obj.activeAnimIndex = s.activeAnimIndex || 0; }
+            if (s.animations?.length) {
+                obj.animations = JSON.parse(JSON.stringify(s.animations));
+                obj.activeAnimIndex = s.activeAnimIndex || 0;
+            }
             if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
         });
     });
+
     Promise.all(restoreAll).then(() => {
         import('./engine.objects.js').then(({ selectObject }) => {
-            // Re-select the previously selected object by name
             const target = snap.selectedLabel
                 ? state.gameObjects.find(o => o.label === snap.selectedLabel)
-                : state.gameObjects[state.gameObjects.length - 1];
-            if (target) selectObject(target);
-            else {
+                : null;
+            if (target) {
+                selectObject(target);
+            } else if (snap.selectedAudioId) {
+                const audioSrc = state.audioSources.find(a => a.id === snap.selectedAudioId);
+                if (audioSrc) {
+                    import('./engine.ui.js').then(m => m.selectAudioSource(audioSrc));
+                } else {
+                    import('./engine.ui.js').then(m => {
+                        m.syncPixiToInspector();
+                        m.refreshHierarchy();
+                    });
+                }
+            } else {
                 import('./engine.ui.js').then(m => {
                     m.syncPixiToInspector();
                     m.refreshHierarchy();
@@ -150,7 +179,13 @@ function _applyScene(snap) {
     });
 }
 
-// ── Update toolbar undo/redo button states ───────────────────
+function _applyBgColor(color) {
+    if (state.app?.renderer) {
+        state.app.renderer.background.color = color;
+    }
+}
+
+// ── Update toolbar buttons ────────────────────────────────────
 function _updateUndoButtons() {
     const undoBtn = document.getElementById('btn-undo');
     const redoBtn = document.getElementById('btn-redo');

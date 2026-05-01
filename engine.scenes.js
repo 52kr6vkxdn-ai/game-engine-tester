@@ -146,11 +146,16 @@ function _saveCurrentScene() {
     });
 
     scene.snapshot = {
-        objects:   objectSnapshots,
-        camX:      state.sceneContainer.x,
-        camY:      state.sceneContainer.y,
-        camScaleX: state.sceneContainer.scale.x,
-        camScaleY: state.sceneContainer.scale.y,
+        objects:       objectSnapshots,
+        audioSources:  state.audioSources.map(s => ({
+            id: s.id, assetId: s.assetId, label: s.label,
+            x: s.x, y: s.y, range: s.range, volume: s.volume, loop: s.loop,
+        })),
+        sceneSettings: JSON.parse(JSON.stringify(state.sceneSettings)),
+        camX:          state.sceneContainer.x,
+        camY:          state.sceneContainer.y,
+        camScaleX:     state.sceneContainer.scale.x,
+        camScaleY:     state.sceneContainer.scale.y,
     };
 }
 
@@ -180,6 +185,16 @@ function _loadScene(index) {
     }
 
     drawGrid();
+
+    // Restore audio sources
+    import('./engine.audio.js').then(m => m.restoreAudioSources(snap?.audioSources || []));
+
+    // Restore scene settings (bg color, size, camera preset)
+    if (snap?.sceneSettings) {
+        Object.assign(state.sceneSettings, snap.sceneSettings);
+        if (state.app?.renderer) state.app.renderer.background.color = state.sceneSettings.bgColor;
+        import('./engine.playmode.js').then(m => m.drawCameraBounds());
+    }
 
     if (snap?.objects?.length) {
         const restoreAll = snap.objects.map(s => {

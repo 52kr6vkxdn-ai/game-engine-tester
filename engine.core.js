@@ -38,7 +38,7 @@ export function startEngine() {
     const container = document.getElementById('pixi-container');
     state.app = new PIXI.Application({
         resizeTo:        container,
-        backgroundColor: 0x282828,
+        backgroundColor: state.sceneSettings.bgColor,
         resolution:      window.devicePixelRatio || 1,
         autoDensity:     true,
         preference:      'webgl',

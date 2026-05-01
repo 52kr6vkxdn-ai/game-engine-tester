@@ -7,6 +7,9 @@ import { state, PIXELS_PER_UNIT } from './engine.state.js';
 
 let els = null;
 
+// Track currently selected audio source
+let _selectedAudioSource = null;
+
 // ── Cache DOM ─────────────────────────────────────────────────
 export function cacheInspectorElements() {
     els = {
@@ -43,10 +46,31 @@ export function syncPixiToInspector() {
     if (!go) {
         ['px','py','pz','rz','sx','sy'].forEach(k => { if(els[k]) els[k].value = ''; });
         if (els.objName) els.objName.value = '';
-        if (pfSection) pfSection.style.display = 'none';
-        if (lightSection) lightSection.style.display = 'none';
+        if (pfSection)        pfSection.style.display        = 'none';
+        if (lightSection)     lightSection.style.display     = 'none';
+        if (spriteSection)    spriteSection.style.display    = 'none';
+        if (animSection)      animSection.style.display      = 'none';
+        if (transformSection) transformSection.style.display = 'none';
+        const lightMount = document.getElementById('light-inspector-mount');
+        if (lightMount) lightMount.innerHTML = '';
+        // Show scene settings panel
+        refreshSceneSettingsPanel();
         return;
     }
+
+    // Deselect audio source when game object is selected
+    if (_selectedAudioSource) {
+        for (const s of state.audioSources) {
+            if (s._container) s._container.alpha = 1.0;
+        }
+        _selectedAudioSource       = null;
+        state._selectedAudioSource = null;
+    }
+
+    // Hide scene settings panel when object selected
+    const scenePanel = document.getElementById('scene-settings-panel');
+    if (scenePanel) scenePanel.style.display = 'none';
+    if (transformSection) transformSection.style.display = '';
 
     if (els.objName) els.objName.value = go.label || '';
     els.px.value = (go.x  /  PIXELS_PER_UNIT).toFixed(2);
@@ -195,6 +219,198 @@ export function syncInspectorToPixi() {
     if (zChanged) import('./engine.objects.js').then(m => m.sortByZ());
 }
 
+// ── Scene Settings Panel (shown when nothing selected) ────────
+export function refreshSceneSettingsPanel() {
+    let panel = document.getElementById('scene-settings-panel');
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'scene-settings-panel';
+        // Insert before inspector footer
+        const footer = document.querySelector('.inspector-footer');
+        const inspector = document.getElementById('panel-inspector');
+        if (footer) {
+            inspector.insertBefore(panel, footer);
+        } else if (inspector) {
+            inspector.appendChild(panel);
+        }
+    }
+    panel.style.display = '';
+
+    const ss = state.sceneSettings;
+    const bgHex = '#' + (ss.bgColor & 0xFFFFFF).toString(16).padStart(6, '0');
+
+    const presetInfo = {
+        'landscape-desktop': '16:9 · 1280×720 — Desktop/landscape screens',
+        'landscape-both':    '16:9 · 1280×720 — Desktop + landscape Android',
+        'portrait':          '9:16 · 720×1280 — Mobile portrait',
+        'automatic':         'Auto — Camera adapts to device orientation',
+    };
+
+    panel.innerHTML = `
+<div class="component-block" style="border-left:3px solid #3A72A5; margin:0;">
+  <div class="component-header" style="background:#12192a;">
+    <svg viewBox="0 0 24 24" class="comp-icon" style="color:#5a9acd;">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M3 9h18M9 21V9"/>
+    </svg>
+    <span style="color:#8ab8d8;font-weight:600;">Scene Settings</span>
+  </div>
+  <div class="component-body" style="gap:8px;">
+    <div class="prop-row">
+      <span class="prop-label">Background</span>
+      <input type="color" id="scene-bg-color" value="${bgHex}" style="width:44px;height:22px;border:none;border-radius:3px;cursor:pointer;padding:1px;">
+    </div>
+    <div class="prop-row">
+      <span class="prop-label">Game Width</span>
+      <input type="number" id="scene-game-w" value="${ss.gameWidth}" step="1" min="100"
+        style="width:80px;background:#1a1a24;border:1px solid #2a3a4a;color:#d8d8e8;border-radius:3px;padding:2px 4px;font-size:11px;">
+      <span style="color:#555;font-size:10px;margin-left:3px;">px</span>
+    </div>
+    <div class="prop-row">
+      <span class="prop-label">Game Height</span>
+      <input type="number" id="scene-game-h" value="${ss.gameHeight}" step="1" min="100"
+        style="width:80px;background:#1a1a24;border:1px solid #2a3a4a;color:#d8d8e8;border-radius:3px;padding:2px 4px;font-size:11px;">
+      <span style="color:#555;font-size:10px;margin-left:3px;">px</span>
+    </div>
+  </div>
+</div>
+<div class="component-block" style="border-left:3px solid #5a3a8a; margin:0;">
+  <div class="component-header" style="background:#1a1230;">
+    <svg viewBox="0 0 24 24" class="comp-icon" style="color:#9a6acd;">
+      <rect x="2" y="4" width="20" height="16" rx="2"/>
+      <circle cx="12" cy="12" r="3"/>
+    </svg>
+    <span style="color:#b89ad8;font-weight:600;">Camera / Resolution</span>
+  </div>
+  <div class="component-body" style="gap:8px;">
+    <div class="prop-row" style="flex-direction:column;align-items:flex-start;gap:4px;">
+      <span class="prop-label">Preset</span>
+      <select id="scene-cam-preset" style="width:100%;background:#1a1a24;border:1px solid #3a2a5a;color:#d8d8e8;border-radius:3px;padding:3px 6px;font-size:11px;">
+        <option value="landscape-desktop"  ${ss.cameraPreset==='landscape-desktop'?'selected':''}>Landscape — Desktop (16:9)</option>
+        <option value="landscape-both"     ${ss.cameraPreset==='landscape-both'?'selected':''}>Landscape — Desktop + Android</option>
+        <option value="portrait"           ${ss.cameraPreset==='portrait'?'selected':''}>Portrait — Mobile (9:16)</option>
+        <option value="automatic"          ${ss.cameraPreset==='automatic'?'selected':''}>Automatic (adapts to device)</option>
+      </select>
+    </div>
+    <div id="scene-preset-info" style="color:#7a7a8a;font-size:10px;font-style:italic;padding:2px 0 0 0;">
+      ${presetInfo[ss.cameraPreset] || ''}
+    </div>
+  </div>
+</div>`;
+
+    // Bind events
+    const bgEl = panel.querySelector('#scene-bg-color');
+    bgEl?.addEventListener('mousedown', () => import('./engine.history.js').then(m => m.pushUndo()));
+    bgEl?.addEventListener('input', (e) => {
+        const hex = parseInt(e.target.value.replace('#',''), 16);
+        state.sceneSettings.bgColor = hex;
+        if (state.app?.renderer) state.app.renderer.background.color = hex;
+    });
+
+    const wEl = panel.querySelector('#scene-game-w');
+    const hEl = panel.querySelector('#scene-game-h');
+    wEl?.addEventListener('focus', () => import('./engine.history.js').then(m => m.pushUndo()));
+    hEl?.addEventListener('focus', () => import('./engine.history.js').then(m => m.pushUndo()));
+    wEl?.addEventListener('change', () => {
+        state.sceneSettings.gameWidth = Math.max(100, parseInt(wEl.value) || 1280);
+        import('./engine.playmode.js').then(m => m.drawCameraBounds());
+    });
+    hEl?.addEventListener('change', () => {
+        state.sceneSettings.gameHeight = Math.max(100, parseInt(hEl.value) || 720);
+        import('./engine.playmode.js').then(m => m.drawCameraBounds());
+    });
+
+    const presetEl = panel.querySelector('#scene-cam-preset');
+    const infoEl   = panel.querySelector('#scene-preset-info');
+    presetEl?.addEventListener('change', () => {
+        import('./engine.history.js').then(m => m.pushUndo());
+        state.sceneSettings.cameraPreset = presetEl.value;
+        if (infoEl) infoEl.textContent = presetInfo[presetEl.value] || '';
+        // Auto-set recommended resolution
+        if (presetEl.value === 'portrait') {
+            state.sceneSettings.gameWidth  = 720;
+            state.sceneSettings.gameHeight = 1280;
+        } else if (presetEl.value === 'landscape-desktop' || presetEl.value === 'landscape-both') {
+            state.sceneSettings.gameWidth  = 1280;
+            state.sceneSettings.gameHeight = 720;
+        }
+        if (wEl) wEl.value = state.sceneSettings.gameWidth;
+        if (hEl) hEl.value = state.sceneSettings.gameHeight;
+        import('./engine.playmode.js').then(m => m.drawCameraBounds());
+    });
+}
+
+// ── Audio Source selection ────────────────────────────────────
+export function selectAudioSource(src) {
+    _selectedAudioSource       = src;
+    state._selectedAudioSource = src;
+
+    // Deselect game object without triggering syncPixiToInspector
+    if (state.gameObject) {
+        const oldGizmo = state.gameObject._gizmoContainer;
+        if (oldGizmo) oldGizmo.visible = false;
+        state.gameObject     = null;
+        state.gizmoContainer = null;
+        state.grpTranslate   = null;
+        state.grpRotate      = null;
+        state.grpScale       = null;
+        state._gizmoHandles  = null;
+        state.spriteBox      = null;
+    }
+
+    // Highlight range circle
+    _highlightAudioSource(src);
+
+    refreshHierarchy();
+
+    // Show audio inspector, hide all object sections
+    const transformSection = document.getElementById('inspector-transform-section');
+    const spriteSection    = document.getElementById('inspector-sprite-section');
+    const animSection      = document.getElementById('inspector-anim-section');
+    const pfSection        = document.getElementById('inspector-prefab-section');
+    const lightMount       = document.getElementById('light-inspector-mount');
+    if (transformSection) transformSection.style.display = 'none';
+    if (spriteSection)    spriteSection.style.display    = 'none';
+    if (animSection)      animSection.style.display      = 'none';
+    if (pfSection)        pfSection.style.display        = 'none';
+
+    const scenePanel = document.getElementById('scene-settings-panel');
+    if (scenePanel) scenePanel.style.display = 'none';
+
+    if (els?.objName) els.objName.value = src.label || '';
+    if (els?.px) els.px.value = '';
+    if (els?.py) els.py.value = '';
+
+    if (lightMount) {
+        import('./engine.audio.js').then(m => {
+            lightMount.innerHTML = m.buildAudioInspectorHTML(src);
+            m.bindAudioInspector(src);
+        });
+    }
+}
+
+export function deselectAudioSource() {
+    // Restore alpha on audio sources
+    for (const s of state.audioSources) {
+        if (s._container) s._container.alpha = 1.0;
+    }
+    _selectedAudioSource       = null;
+    state._selectedAudioSource = null;
+    refreshHierarchy();
+    syncPixiToInspector();
+}
+
+export function syncAudioSourceToInspector(src) {
+    import('./engine.audio.js').then(m => m.syncAudioSourceToInspector(src));
+}
+
+function _highlightAudioSource(src) {
+    // Dim all audio sources, highlight the selected one
+    for (const s of state.audioSources) {
+        if (s._container) s._container.alpha = s === src ? 1.0 : 0.5;
+    }
+}
+
 // ── Instant prefab field propagation ─────────────────────────
 // Only TINT propagates live to all instances. Rotation and scale
 // are per-instance and never propagated automatically.
@@ -226,10 +442,15 @@ function _propagatePrefabField(sourceObj, field, value) {
 // ── Inspector Listeners ───────────────────────────────────────
 export function initInspectorListeners() {
     if (!els) return;
+    const _pushU = () => import('./engine.history.js').then(m => m.pushUndo());
     ['px','py','pz','rz','sx','sy'].forEach(k => {
+        if (!els[k]) return;
+        // Push undo BEFORE edit starts (on focus)
+        els[k].addEventListener('focus', _pushU);
         els[k].addEventListener('input', syncInspectorToPixi);
     });
 
+    els.color.addEventListener('focus', _pushU);
     els.color.addEventListener('input', (e) => {
         const go = state.gameObject;
         if (!go) return;
@@ -427,7 +648,54 @@ export function refreshHierarchy() {
         list.appendChild(item);
     }
 
-    if (state.gameObjects.length === 0) {
+    // ── Audio sources in hierarchy ────────────────────────────
+    for (const src of state.audioSources) {
+        const item = document.createElement('div');
+        const isSel = src === _selectedAudioSource;
+        item.className = 'tree-item' + (isSel ? ' selected' : '');
+        item.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:3px 8px;cursor:pointer;';
+
+        const left = document.createElement('div');
+        left.className = 'tree-item-left';
+
+        // Speaker icon
+        const icon = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        icon.setAttribute('viewBox','0 0 24 24');
+        icon.style.cssText = 'width:13px;height:13px;fill:none;stroke:#5aabdd;stroke-width:2;flex-shrink:0;';
+        icon.innerHTML = '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>';
+        left.appendChild(icon);
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'tree-item-name';
+        nameEl.textContent = src.label || 'AudioSource';
+        left.appendChild(nameEl);
+
+        const badge = document.createElement('span');
+        badge.className = 'tree-item-light-badge';
+        badge.style.background = 'rgba(58,154,217,0.12)';
+        badge.style.color = '#8dd4f8';
+        badge.style.borderColor = 'rgba(58,154,217,0.3)';
+        badge.textContent = '3D Audio';
+        left.appendChild(badge);
+
+        item.appendChild(left);
+
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '✕';
+        delBtn.style.cssText = 'background:transparent;border:none;color:#505060;font-size:11px;padding:2px 4px;cursor:pointer;border-radius:2px;';
+        delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            import('./engine.audio.js').then(m => m.removeAudioSource(src));
+        });
+        delBtn.addEventListener('mouseenter', () => delBtn.style.color = '#f88');
+        delBtn.addEventListener('mouseleave', () => delBtn.style.color = '#505060');
+        item.appendChild(delBtn);
+
+        item.addEventListener('click', () => selectAudioSource(src));
+        list.appendChild(item);
+    }
+
+    if (state.gameObjects.length === 0 && state.audioSources.length === 0) {
         const empty = document.createElement('div');
         empty.style.cssText = 'color:#505060;font-size:11px;padding:16px;text-align:center;font-style:italic;';
         empty.textContent = 'Empty scene';
@@ -571,12 +839,19 @@ export function initSceneDrop() {
             return;
         }
 
-        // ── Asset drop (image only — skip audio) ─────────────
+        // ── Asset drop ────────────────────────────────────────
         const assetId = e.dataTransfer.getData('assetId');
         if (!assetId) return;
         const asset = state.assets.find(a => a.id === assetId);
-        if (!asset || !state.app || asset.type === 'audio') return;
+        if (!asset || !state.app) return;
 
+        // Audio asset → create 3D audio source in scene
+        if (asset.type === 'audio') {
+            import('./engine.audio.js').then(m => m.createAudioSource(asset, local.x, local.y));
+            return;
+        }
+
+        // Image asset → create sprite
         import('./engine.objects.js').then(m => {
             const obj = m.createImageObject(asset, local.x, local.y);
             if (obj && state._bindGizmoHandles) state._bindGizmoHandles(obj);
