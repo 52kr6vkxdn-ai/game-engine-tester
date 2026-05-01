@@ -25,6 +25,13 @@ import {
     tileAlphaBoundsForAsset, unionTileAlphaBounds,
 } from './engine.collision-overlay.js';
 
+// ┌─ OFFLINE SWAP ────────────────────────────────────────────────────────────┐
+// │  To run without internet:                                                 │
+// │  1. Open the URL below in your browser and press Ctrl+S                   │
+// │     https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js    │
+// │  2. Save the file as  matter.min.js  next to index.html                  │
+// │  3. Replace the MATTER_CDN string below with:  './matter.min.js'          │
+// └───────────────────────────────────────────────────────────────────────────┘
 const MATTER_CDN = 'https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js';
 
 // ── Module state ──────────────────────────────────────────────
@@ -183,12 +190,25 @@ function _makeBody(Bodies, Body, obj, cx, cy) {
 }
 
 function _bodyOpts(obj) {
+    const isKinematic = obj.physicsBody === 'kinematic';
     return {
         isStatic:    obj.physicsBody === 'static',
+        isSensor:    !!obj.physicsIsSensor,
         label:       obj.label,
-        friction:    obj.physicsFriction    ?? 0.3,
-        restitution: obj.physicsRestitution ?? 0.1,
-        frictionAir: obj.physicsBody === 'kinematic' ? 1.0 : 0.01,
+        friction:    obj.physicsFriction         ?? 0.3,
+        restitution: obj.physicsRestitution      ?? 0.1,
+        density:     obj.physicsDensity          ?? 0.001,
+        frictionAir: isKinematic ? 1.0 : (obj.physicsLinearDamping ?? 0.01),
+        frictionAngular: obj.physicsAngularDamping ?? 0,
+        // gravity scale is applied per-tick in _applyGravityScale()
+        collisionFilter: {
+            category: obj.physicsCollisionCategory ?? 0x0001,
+            mask:     obj.physicsCollisionMask     ?? 0xFFFFFFFF,
+            group:    0,
+        },
+        // fixedRotation is applied after body creation via Body.setInertia
+        _fixedRotation: !!obj.physicsFixedRotation,
+        _gravityScale:  obj.physicsGravityScale  ?? 1,
     };
 }
 
@@ -262,6 +282,10 @@ export async function startPhysics() {
 
         if (type !== 'static') Body.setAngle(body, obj.rotation || 0);
         if (type === 'kinematic') window.Matter.Body.setInertia(body, Infinity);
+        // ── Fixed rotation ───────────────────────────────────
+        if (obj.physicsFixedRotation && type !== 'static' && type !== 'kinematic') {
+            Body.setInertia(body, Infinity);
+        }
 
         toAdd.push(body);
         const entry = { obj, body, type };
@@ -294,12 +318,27 @@ export async function startPhysics() {
 
     Composite.add(_engine.world, toAdd);
 
+    const _worldGravity = _engine.gravity;
     let last = null;
     function tick(now) {
         _rafId = requestAnimationFrame(tick);
         if (state.isPaused) return;
         const dt = last ? Math.min(now - last, 50) : 16.67;
         last = now;
+
+        // Apply per-body gravity scale before each engine step
+        const { Body: B } = window.Matter;
+        for (const { obj, body, type } of _bodies) {
+            if (type === 'static' || type === 'kinematic') continue;
+            const scale = (obj.physicsGravityScale ?? 1) - 1; // 1 = default, 0 = no extra force needed
+            if (scale !== 0) {
+                // Matter already applies world gravity; we add the delta
+                const gx = _worldGravity.x * _worldGravity.scale * scale * body.mass;
+                const gy = _worldGravity.y * _worldGravity.scale * scale * body.mass;
+                B.applyForce(body, body.position, { x: gx, y: gy });
+            }
+        }
+
         Engine.update(_engine, dt);
         for (const { obj, body, type } of _bodies) {
             if (type === 'static') continue;
@@ -372,6 +411,9 @@ function _rebuildBodyForFrame(entry) {
         Body.setAngularVelocity(newBody, angVel);
     }
     if (type === 'kinematic') Body.setInertia(newBody, Infinity);
+    if (obj.physicsFixedRotation && type !== 'static' && type !== 'kinematic') {
+        Body.setInertia(newBody, Infinity);
+    }
 
     // Swap in/out of the world
     Composite.remove(_engine.world, oldBody);
@@ -405,9 +447,15 @@ export function buildPhysicsInspectorHTML(obj) {
     }
 
     const type   = obj.physicsBody      ?? 'none';
-    const fric   = obj.physicsFriction    ?? 0.3;
-    const rest   = obj.physicsRestitution ?? 0.1;
-    const shape  = obj.physicsShape      ?? 'box';
+    const fric   = obj.physicsFriction        ?? 0.3;
+    const rest   = obj.physicsRestitution     ?? 0.1;
+    const dens   = obj.physicsDensity         ?? 0.001;
+    const grav   = obj.physicsGravityScale    ?? 1;
+    const ldamp  = obj.physicsLinearDamping   ?? 0;
+    const adamp  = obj.physicsAngularDamping  ?? 0;
+    const fixRot = !!obj.physicsFixedRotation;
+    const sensor = !!obj.physicsIsSensor;
+    const shape  = obj.physicsShape           ?? 'box';
 
     const OPT  = (v, l) => `<option value="${v}" ${type  === v ? 'selected' : ''}>${l}</option>`;
     const SOPT = (v, l) => `<option value="${v}" ${shape === v ? 'selected' : ''}>${l}</option>`;
@@ -507,6 +555,9 @@ export function buildPhysicsInspectorHTML(obj) {
             ${frameTabsHTML}
           </div>
 
+          <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
+          <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Material</div>
+
           <div class="prop-row">
             <span class="prop-label">Friction</span>
             <input id="phys-friction" type="number" value="${fric}" min="0" max="1" step="0.05" style="width:60px;${_inp()}">
@@ -514,6 +565,46 @@ export function buildPhysicsInspectorHTML(obj) {
           <div class="prop-row">
             <span class="prop-label">Bounce</span>
             <input id="phys-bounce" type="number" value="${rest}" min="0" max="1" step="0.05" style="width:60px;${_inp()}">
+          </div>
+          <div class="prop-row">
+            <span class="prop-label">Density</span>
+            <input id="phys-density" type="number" value="${dens}" min="0.0001" max="100" step="0.0005" style="width:60px;${_inp()}">
+          </div>
+
+          <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
+          <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Motion</div>
+
+          <div class="prop-row">
+            <span class="prop-label" title="Multiplier applied to world gravity for this body">Gravity scale</span>
+            <input id="phys-gravity-scale" type="number" value="${grav}" min="-10" max="10" step="0.1" style="width:60px;${_inp()}">
+          </div>
+          <div class="prop-row">
+            <span class="prop-label" title="Resistance to linear movement (air drag)">Linear damp</span>
+            <input id="phys-linear-damp" type="number" value="${ldamp}" min="0" max="100" step="0.05" style="width:60px;${_inp()}">
+          </div>
+          <div class="prop-row">
+            <span class="prop-label" title="Resistance to spinning">Angular damp</span>
+            <input id="phys-angular-damp" type="number" value="${adamp}" min="0" max="100" step="0.05" style="width:60px;${_inp()}">
+          </div>
+
+          <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
+          <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Constraints & Layers</div>
+
+          <div class="prop-row">
+            <span class="prop-label">Fix rotation</span>
+            <input id="phys-fixed-rot" type="checkbox" ${fixRot ? 'checked' : ''} style="width:14px;height:14px;accent-color:#facc15;cursor:pointer;">
+          </div>
+          <div class="prop-row">
+            <span class="prop-label" title="Detects overlaps but causes no collision response">Is sensor</span>
+            <input id="phys-sensor" type="checkbox" ${sensor ? 'checked' : ''} style="width:14px;height:14px;accent-color:#facc15;cursor:pointer;">
+          </div>
+          <div class="prop-row">
+            <span class="prop-label" title="Bitmask — which layer this body belongs to">Category</span>
+            <input id="phys-col-cat" type="number" value="${obj.physicsCollisionCategory ?? 1}" min="1" max="2147483647" step="1" style="width:80px;${_inp()}">
+          </div>
+          <div class="prop-row">
+            <span class="prop-label" title="Bitmask — which layers this body collides with (-1 = all)">Mask</span>
+            <input id="phys-col-mask" type="number" value="${obj.physicsCollisionMask ?? -1}" min="-2147483648" max="2147483647" step="1" style="width:80px;${_inp()}">
           </div>
 
           <div style="background:#1a1400;border:1px solid #facc1533;border-radius:3px;padding:4px 6px;font-size:9px;color:#facc1566;">
@@ -761,7 +852,41 @@ export function bindPhysicsInspector(obj) {
         _pushUndo();
     });
 
-    // "Show Collision" button — toggles the global overlay
+    // ── New physics settings ──────────────────────────────────
+    document.getElementById('phys-density')?.addEventListener('change', (e) => {
+        obj.physicsDensity = Math.max(0.0001, parseFloat(e.target.value) || 0.001);
+        _pushUndo();
+    });
+    document.getElementById('phys-gravity-scale')?.addEventListener('change', (e) => {
+        obj.physicsGravityScale = parseFloat(e.target.value) ?? 1;
+        _pushUndo();
+    });
+    document.getElementById('phys-linear-damp')?.addEventListener('change', (e) => {
+        obj.physicsLinearDamping = Math.max(0, parseFloat(e.target.value) || 0);
+        _pushUndo();
+    });
+    document.getElementById('phys-angular-damp')?.addEventListener('change', (e) => {
+        obj.physicsAngularDamping = Math.max(0, parseFloat(e.target.value) || 0);
+        _pushUndo();
+    });
+    document.getElementById('phys-fixed-rot')?.addEventListener('change', (e) => {
+        obj.physicsFixedRotation = e.target.checked;
+        _pushUndo();
+    });
+    document.getElementById('phys-sensor')?.addEventListener('change', (e) => {
+        obj.physicsIsSensor = e.target.checked;
+        _pushUndo();
+    });
+    document.getElementById('phys-col-cat')?.addEventListener('change', (e) => {
+        obj.physicsCollisionCategory = Math.max(1, parseInt(e.target.value) || 1);
+        _pushUndo();
+    });
+    document.getElementById('phys-col-mask')?.addEventListener('change', (e) => {
+        obj.physicsCollisionMask = parseInt(e.target.value) ?? -1;
+        _pushUndo();
+    });
+
+    // \"Show Collision\" button — toggles the global overlay
     document.getElementById('phys-show-collision')?.addEventListener('click', () => {
         import('./engine.collision-overlay.js').then(m => {
             m.setCollisionVisible(!state.showCollision);

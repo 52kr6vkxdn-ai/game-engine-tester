@@ -17,6 +17,25 @@ export function saveAsPrefab(obj) {
         // Each instance manages its own rotation and scale independently.
         animations:      obj.animations ? JSON.parse(JSON.stringify(obj.animations)) : [],
         activeAnimIndex: obj.activeAnimIndex || 0,
+        // ── Physics / collision ─────────────────────────────────
+        physicsBody:             obj.physicsBody             ?? 'none',
+        physicsFriction:         obj.physicsFriction         ?? 0.3,
+        physicsRestitution:      obj.physicsRestitution      ?? 0.1,
+        physicsDensity:          obj.physicsDensity          ?? 0.001,
+        physicsGravityScale:     obj.physicsGravityScale     ?? 1,
+        physicsLinearDamping:    obj.physicsLinearDamping    ?? 0,
+        physicsAngularDamping:   obj.physicsAngularDamping   ?? 0,
+        physicsFixedRotation:    !!obj.physicsFixedRotation,
+        physicsIsSensor:         !!obj.physicsIsSensor,
+        physicsCollisionCategory: obj.physicsCollisionCategory ?? 1,
+        physicsCollisionMask:    obj.physicsCollisionMask    ?? 0xFFFFFFFF,
+        physicsShape:            obj.physicsShape            ?? 'box',
+        physicsSize:             obj.physicsSize     ? JSON.parse(JSON.stringify(obj.physicsSize))     : null,
+        physicsPolygon:          obj.physicsPolygon  ? JSON.parse(JSON.stringify(obj.physicsPolygon))  : null,
+        physicsPolygons:         obj.physicsPolygons ? JSON.parse(JSON.stringify(obj.physicsPolygons)) : null,
+        _polyUnit:               obj._polyUnit || null,
+        _collisionShapeInit:     !!obj._collisionShapeInit,
+        // ───────────────────────────────────────────────────────
         thumbnail:       _generateThumbnail(obj),
         createdAt:       Date.now(),
     };
@@ -53,6 +72,26 @@ function _applyPrefabDataToInstance(prefab, obj, { includeAnims = true } = {}) {
         obj.animations      = JSON.parse(JSON.stringify(prefab.animations));
         obj.activeAnimIndex = prefab.activeAnimIndex || 0;
     }
+    // ── Physics / collision ──────────────────────────────────────
+    if (prefab.physicsBody && prefab.physicsBody !== 'none') {
+        obj.physicsBody             = prefab.physicsBody;
+        obj.physicsFriction         = prefab.physicsFriction         ?? 0.3;
+        obj.physicsRestitution      = prefab.physicsRestitution      ?? 0.1;
+        obj.physicsDensity          = prefab.physicsDensity          ?? 0.001;
+        obj.physicsGravityScale     = prefab.physicsGravityScale     ?? 1;
+        obj.physicsLinearDamping    = prefab.physicsLinearDamping    ?? 0;
+        obj.physicsAngularDamping   = prefab.physicsAngularDamping   ?? 0;
+        obj.physicsFixedRotation    = !!prefab.physicsFixedRotation;
+        obj.physicsIsSensor         = !!prefab.physicsIsSensor;
+        obj.physicsCollisionCategory = prefab.physicsCollisionCategory ?? 1;
+        obj.physicsCollisionMask    = prefab.physicsCollisionMask    ?? 0xFFFFFFFF;
+        obj.physicsShape            = prefab.physicsShape            ?? 'box';
+        obj.physicsSize             = prefab.physicsSize     ? JSON.parse(JSON.stringify(prefab.physicsSize))     : null;
+        obj.physicsPolygon          = prefab.physicsPolygon  ? JSON.parse(JSON.stringify(prefab.physicsPolygon))  : null;
+        obj.physicsPolygons         = prefab.physicsPolygons ? JSON.parse(JSON.stringify(prefab.physicsPolygons)) : null;
+        obj._polyUnit               = prefab._polyUnit || null;
+        obj._collisionShapeInit     = !!prefab._collisionShapeInit;
+    }
 }
 
 export function applyInstanceToPrefab(obj) {
@@ -64,6 +103,25 @@ export function applyInstanceToPrefab(obj) {
     prefab.name            = obj.label;
     prefab.animations      = obj.animations ? JSON.parse(JSON.stringify(obj.animations)) : [];
     prefab.activeAnimIndex = obj.activeAnimIndex || 0;
+    // ── Physics / collision ──────────────────────────────────────
+    prefab.physicsBody             = obj.physicsBody             ?? 'none';
+    prefab.physicsFriction         = obj.physicsFriction         ?? 0.3;
+    prefab.physicsRestitution      = obj.physicsRestitution      ?? 0.1;
+    prefab.physicsDensity          = obj.physicsDensity          ?? 0.001;
+    prefab.physicsGravityScale     = obj.physicsGravityScale     ?? 1;
+    prefab.physicsLinearDamping    = obj.physicsLinearDamping    ?? 0;
+    prefab.physicsAngularDamping   = obj.physicsAngularDamping   ?? 0;
+    prefab.physicsFixedRotation    = !!obj.physicsFixedRotation;
+    prefab.physicsIsSensor         = !!obj.physicsIsSensor;
+    prefab.physicsCollisionCategory = obj.physicsCollisionCategory ?? 1;
+    prefab.physicsCollisionMask    = obj.physicsCollisionMask    ?? 0xFFFFFFFF;
+    prefab.physicsShape            = obj.physicsShape            ?? 'box';
+    prefab.physicsSize             = obj.physicsSize     ? JSON.parse(JSON.stringify(obj.physicsSize))     : null;
+    prefab.physicsPolygon          = obj.physicsPolygon  ? JSON.parse(JSON.stringify(obj.physicsPolygon))  : null;
+    prefab.physicsPolygons         = obj.physicsPolygons ? JSON.parse(JSON.stringify(obj.physicsPolygons)) : null;
+    prefab._polyUnit               = obj._polyUnit || null;
+    prefab._collisionShapeInit     = !!obj._collisionShapeInit;
+    // ────────────────────────────────────────────────────────────
     prefab.thumbnail       = _generateThumbnail(obj);
     refreshPrefabPanel();
     _logConsole(`✔ Prefab "${prefab.name}" updated from this instance`, '#8f8');
@@ -78,6 +136,25 @@ export async function applyPrefabToAll(prefabId, sourceObj = null) {
         prefab.name            = sourceObj.label;
         prefab.animations      = sourceObj.animations ? JSON.parse(JSON.stringify(sourceObj.animations)) : [];
         prefab.activeAnimIndex = sourceObj.activeAnimIndex || 0;
+        // ── Physics / collision ──────────────────────────────────
+        prefab.physicsBody             = sourceObj.physicsBody             ?? 'none';
+        prefab.physicsFriction         = sourceObj.physicsFriction         ?? 0.3;
+        prefab.physicsRestitution      = sourceObj.physicsRestitution      ?? 0.1;
+        prefab.physicsDensity          = sourceObj.physicsDensity          ?? 0.001;
+        prefab.physicsGravityScale     = sourceObj.physicsGravityScale     ?? 1;
+        prefab.physicsLinearDamping    = sourceObj.physicsLinearDamping    ?? 0;
+        prefab.physicsAngularDamping   = sourceObj.physicsAngularDamping   ?? 0;
+        prefab.physicsFixedRotation    = !!sourceObj.physicsFixedRotation;
+        prefab.physicsIsSensor         = !!sourceObj.physicsIsSensor;
+        prefab.physicsCollisionCategory = sourceObj.physicsCollisionCategory ?? 1;
+        prefab.physicsCollisionMask    = sourceObj.physicsCollisionMask    ?? 0xFFFFFFFF;
+        prefab.physicsShape            = sourceObj.physicsShape            ?? 'box';
+        prefab.physicsSize             = sourceObj.physicsSize     ? JSON.parse(JSON.stringify(sourceObj.physicsSize))     : null;
+        prefab.physicsPolygon          = sourceObj.physicsPolygon  ? JSON.parse(JSON.stringify(sourceObj.physicsPolygon))  : null;
+        prefab.physicsPolygons         = sourceObj.physicsPolygons ? JSON.parse(JSON.stringify(sourceObj.physicsPolygons)) : null;
+        prefab._polyUnit               = sourceObj._polyUnit || null;
+        prefab._collisionShapeInit     = !!sourceObj._collisionShapeInit;
+        // ────────────────────────────────────────────────────────
         prefab.thumbnail       = _generateThumbnail(sourceObj);
     }
     let count = 0;
@@ -93,6 +170,25 @@ export async function applyPrefabToAll(prefabId, sourceObj = null) {
             s.tint            = prefab.tint;
             s.animations      = JSON.parse(JSON.stringify(prefab.animations));
             s.activeAnimIndex = prefab.activeAnimIndex;
+            // ── Physics / collision ──────────────────────────────
+            s.physicsBody             = prefab.physicsBody;
+            s.physicsFriction         = prefab.physicsFriction;
+            s.physicsRestitution      = prefab.physicsRestitution;
+            s.physicsDensity          = prefab.physicsDensity;
+            s.physicsGravityScale     = prefab.physicsGravityScale;
+            s.physicsLinearDamping    = prefab.physicsLinearDamping;
+            s.physicsAngularDamping   = prefab.physicsAngularDamping;
+            s.physicsFixedRotation    = prefab.physicsFixedRotation;
+            s.physicsIsSensor         = prefab.physicsIsSensor;
+            s.physicsCollisionCategory = prefab.physicsCollisionCategory;
+            s.physicsCollisionMask    = prefab.physicsCollisionMask;
+            s.physicsShape            = prefab.physicsShape;
+            s.physicsSize             = prefab.physicsSize     ? JSON.parse(JSON.stringify(prefab.physicsSize))     : null;
+            s.physicsPolygon          = prefab.physicsPolygon  ? JSON.parse(JSON.stringify(prefab.physicsPolygon))  : null;
+            s.physicsPolygons         = prefab.physicsPolygons ? JSON.parse(JSON.stringify(prefab.physicsPolygons)) : null;
+            s._polyUnit               = prefab._polyUnit;
+            s._collisionShapeInit     = prefab._collisionShapeInit;
+            // ────────────────────────────────────────────────────
             count++;
         }
     }
