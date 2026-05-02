@@ -890,7 +890,14 @@ function _applyAnimToObject(obj) {
     obj.addChildAt(animSprite, 0);
     obj.spriteGraphic = animSprite;
     obj._animSprite   = animSprite;
-    animSprite.play();
+
+    // Only auto-play when in play mode; in edit mode show first frame statically
+    if (window._zState?.isPlaying) {
+        animSprite.play();
+    } else {
+        animSprite.stop();
+        animSprite.gotoAndStop(0);
+    }
 }
 
 // ── Stop any live preview ticker ──────────────────────────────
@@ -898,6 +905,17 @@ function _stopPreview(obj) {
     if (obj?._animInterval) {
         clearInterval(obj._animInterval);
         obj._animInterval = null;
+    }
+}
+
+// ── Apply animation to object — used by undo/redo restore.
+//    Shows the FIRST frame statically (no playback in edit mode).
+export function reapplyAnimationToObject(obj) {
+    _applyAnimToObject(obj);
+    // In edit mode, stop playback immediately and freeze on frame 0
+    if (!window._zState?.isPlaying && obj._animSprite) {
+        obj._animSprite.stop();
+        obj._animSprite.gotoAndStop(0);
     }
 }
 

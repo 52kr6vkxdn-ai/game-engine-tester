@@ -133,23 +133,26 @@ export function deleteSelected() {
     const obj = state.gameObject;
     if (!obj) return;
 
-    _getUndo().then(push => push());
+    // Push undo BEFORE we destroy anything — the snapshot must include this object
+    import('./engine.history.js').then(({ pushUndo }) => {
+        pushUndo();
 
-    const idx = state.gameObjects.indexOf(obj);
-    if (idx !== -1) state.gameObjects.splice(idx, 1);
+        const idx = state.gameObjects.indexOf(obj);
+        if (idx !== -1) state.gameObjects.splice(idx, 1);
 
-    state.sceneContainer.removeChild(obj);
-    try { obj.destroy({ children: true }); } catch(_) {}
+        state.sceneContainer.removeChild(obj);
+        try { obj.destroy({ children: true }); } catch(_) {}
 
-    const next = state.gameObjects[Math.min(idx, state.gameObjects.length - 1)] || null;
-    state.gameObject = null;
-    if (next) selectObject(next);
-    else {
-        state.gameObject = state.gizmoContainer = state.grpTranslate =
-            state.grpRotate = state.grpScale = state._gizmoHandles = state.spriteBox = null;
-        syncPixiToInspector();
-        refreshHierarchy();
-    }
+        const next = state.gameObjects[Math.min(idx, state.gameObjects.length - 1)] || null;
+        state.gameObject = null;
+        if (next) selectObject(next);
+        else {
+            state.gameObject = state.gizmoContainer = state.grpTranslate =
+                state.grpRotate = state.grpScale = state._gizmoHandles = state.spriteBox = null;
+            syncPixiToInspector();
+            refreshHierarchy();
+        }
+    });
 }
 
 // ── Prefab stubs ──────────────────────────────────────────────

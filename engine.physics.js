@@ -169,6 +169,39 @@ function _makeBody(Bodies, Body, obj, cx, cy) {
         return body;
     }
 
+    if (shape === 'capsule') {
+        // Build a capsule as a compound body: a rectangle + two circles at the ends
+        const capW = (obj.physicsSize?.capW ?? g.w) * sx;
+        const capH = (obj.physicsSize?.capH ?? g.h) * sy;
+        const capR = Math.min(capW, capH) / 2;
+        const len  = Math.max(capW, capH) / 2 - capR;   // half-length of centre rect
+        try {
+            let parts;
+            if (capW >= capH) {
+                // Horizontal capsule
+                parts = [
+                    Bodies.rectangle(bcx, bcy, Math.max(len * 2, 2), Math.max(capH, 2), opts),
+                    Bodies.circle(bcx + len, bcy, capR, opts),
+                    Bodies.circle(bcx - len, bcy, capR, opts),
+                ];
+            } else {
+                // Vertical capsule
+                parts = [
+                    Bodies.rectangle(bcx, bcy, Math.max(capW, 2), Math.max(len * 2, 2), opts),
+                    Bodies.circle(bcx, bcy - len, capR, opts),
+                    Bodies.circle(bcx, bcy + len, capR, opts),
+                ];
+            }
+            const { Body: B } = window.Matter;
+            const compound = B.create({ parts, ...opts });
+            B.setPosition(compound, { x: bcx, y: bcy });
+            compound._zenOffset = { x: ox, y: oy };
+            return compound;
+        } catch (e) {
+            console.warn('[Physics] capsule compound failed, using box:', e.message);
+        }
+    }
+
     if ((shape === 'polygon' || shape === 'shared') && Array.isArray(poly) && poly.length >= 3) {
         // Polygon verts are already centred at sprite-origin → no extra offset
         const worldVerts = poly.map(p => ({ x: p.x * sx, y: p.y * sy }));
@@ -470,6 +503,9 @@ export function buildPhysicsInspectorHTML(obj) {
     const psW  = +geom.w.toFixed(1);
     const psH  = +geom.h.toFixed(1);
     const psR  = +geom.r.toFixed(1);
+    // Capsule: use physicsSize.capW/capH if overridden, else derive from sprite
+    const psCapW = +(obj.physicsSize?.capW ?? geom.w).toFixed(1);
+    const psCapH = +(obj.physicsSize?.capH ?? geom.h).toFixed(1);
     // Whether the user has overridden the size (used to highlight the "reset" button)
     const hasOverride = !!(obj.physicsSize && (obj.physicsSize.w || obj.physicsSize.h || obj.physicsSize.r));
 
@@ -521,7 +557,7 @@ export function buildPhysicsInspectorHTML(obj) {
           <div class="prop-row">
             <span class="prop-label">Collision</span>
             <select id="phys-shape" style="${_sel()}">
-              ${SOPT('box','▭ Box')} ${SOPT('circle','◯ Circle')} ${SOPT('polygon','⬡ Polygon')}
+              ${SOPT('box','▭ Box')} ${SOPT('circle','◯ Circle')} ${SOPT('capsule','⬩ Capsule')} ${SOPT('polygon','⬡ Polygon')}
             </select>
           </div>
 
@@ -547,6 +583,21 @@ export function buildPhysicsInspectorHTML(obj) {
               <input id="phys-circle-r" type="number" min="1" step="1" value="${psR}" style="width:80px;${_inp()}">
             </div>
             <button id="phys-size-reset-circle" style="${_btn(hasOverride?'#06b6d4':'#444')}width:100%;font-size:10px;">↻ Auto-fit to visible pixels</button>
+          </div>
+
+          <!-- Capsule size editor -->
+          <div id="phys-capsule-row" style="display:${shape==='capsule'?'flex':'none'};flex-direction:column;gap:4px;background:#0a0a18;border:1px solid #1a1a30;border-radius:3px;padding:6px 8px;">
+            <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Capsule size (px)</div>
+            <div class="prop-row">
+              <span class="prop-label">Width</span>
+              <input id="phys-cap-w" type="number" min="1" step="1" value="${psCapW}" style="width:80px;${_inp()}">
+            </div>
+            <div class="prop-row">
+              <span class="prop-label">Height</span>
+              <input id="phys-cap-h" type="number" min="1" step="1" value="${psCapH}" style="width:80px;${_inp()}">
+            </div>
+            <div style="color:#555;font-size:9px;">Pill shape — round ends on the short axis</div>
+            <button id="phys-size-reset-capsule" style="${_btn(hasOverride?'#06b6d4':'#444')}width:100%;font-size:10px;">↻ Auto-fit to visible pixels</button>
           </div>
 
           <div id="phys-polygon-row" style="display:${shape==='polygon'?'flex':'none'};flex-direction:column;gap:4px;">
@@ -644,18 +695,18 @@ function _polySummary(poly) {
 // Auto-fit: generate a tight collision shape from sprite alpha
 // ─────────────────────────────────────────────────────────────
 
-export function autoFitCollisionShape(obj) {
-    _autoFitCollisionShape(obj);
+export function autoFitCollisionShape(obj, onDone) {
+    _autoFitCollisionShape(obj, onDone);
 }
 
-function _autoFitCollisionShape(obj) {
+function _autoFitCollisionShape(obj, onDone) {
     // Try alpha-based hull from sprite frames, fall back to box
     const dataURL = obj.animations?.[obj.activeAnimIndex ?? 0]?.frames?.[0]?.dataURL
                  || obj.spriteGraphic?.texture?.baseTexture?.resource?.source?.src
                  || null;
 
     if (dataURL) {
-        _alphaHullFromDataURL(dataURL, obj);
+        _alphaHullFromDataURL(dataURL, obj, onDone);
     } else {
         // Fallback: tight box from visible sprite size (container-local px)
         const raw = rawSpriteSize(obj);
@@ -663,11 +714,12 @@ function _autoFitCollisionShape(obj) {
         obj.physicsPolygons.shared = _defaultBox(raw.w, raw.h);
         obj.physicsShape = 'polygon';
         obj._polyUnit = 'container';
-        if (!obj.physicsPolygon) obj.physicsPolygon = obj.physicsPolygons.shared.slice();
+        obj.physicsPolygon = obj.physicsPolygons.shared.slice();
+        try { onDone?.(); } catch(_) {}
     }
 }
 
-function _alphaHullFromDataURL(dataURL, obj) {
+function _alphaHullFromDataURL(dataURL, obj, onDone) {
     const img = new Image();
     img.onload = () => {
         const canvas = document.createElement('canvas');
@@ -688,7 +740,10 @@ function _alphaHullFromDataURL(dataURL, obj) {
                 obj.physicsShape  = 'polygon';
                 obj.physicsPolygon = hull.slice();
                 obj._polyUnit = 'container';
-                import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+                // First frame polygon should always match shared when auto-fitting
+                const firstFrameId = obj.animations?.[obj.activeAnimIndex ?? 0]?.frames?.[0]?.id;
+                if (firstFrameId) obj.physicsPolygons[firstFrameId] = hull.slice();
+                try { onDone?.(); } catch(_) {}
                 return;
             }
         } catch(_) {}
@@ -700,7 +755,9 @@ function _alphaHullFromDataURL(dataURL, obj) {
         obj.physicsShape = 'polygon';
         obj.physicsPolygon = obj.physicsPolygons.shared.slice();
         obj._polyUnit = 'container';
-        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
+        const firstFrameId = obj.animations?.[obj.activeAnimIndex ?? 0]?.frames?.[0]?.id;
+        if (firstFrameId) obj.physicsPolygons[firstFrameId] = obj.physicsPolygons.shared.slice();
+        try { onDone?.(); } catch(_) {}
     };
     img.src = dataURL;
 }
@@ -771,17 +828,42 @@ export function bindPhysicsInspector(obj) {
 
     shapeEl?.addEventListener('change', () => {
         obj.physicsShape = shapeEl.value;
-        const boxRow    = document.getElementById('phys-box-row');
-        const circleRow = document.getElementById('phys-circle-row');
-        if (polyRow)    polyRow.style.display    = shapeEl.value === 'polygon' ? 'flex' : 'none';
-        if (boxRow)     boxRow.style.display     = shapeEl.value === 'box'     ? 'flex' : 'none';
-        if (circleRow)  circleRow.style.display  = shapeEl.value === 'circle'  ? 'flex' : 'none';
+        const boxRow     = document.getElementById('phys-box-row');
+        const circleRow  = document.getElementById('phys-circle-row');
+        const capsuleRow = document.getElementById('phys-capsule-row');
+        if (polyRow)     polyRow.style.display    = shapeEl.value === 'polygon' ? 'flex' : 'none';
+        if (boxRow)      boxRow.style.display     = shapeEl.value === 'box'     ? 'flex' : 'none';
+        if (circleRow)   circleRow.style.display  = shapeEl.value === 'circle'  ? 'flex' : 'none';
+        if (capsuleRow)  capsuleRow.style.display = shapeEl.value === 'capsule' ? 'flex' : 'none';
         _pushUndo();
         import('./engine.collision-overlay.js').then(m => {
             // Auto-show collision overlay so user sees what they're editing
             if (!state.showCollision) m.setCollisionVisible(true);
             m.refreshCollisionOverlay();
         });
+    });
+
+    // ── Capsule size inputs ───────────────────────────────
+    const capW = document.getElementById('phys-cap-w');
+    const capH = document.getElementById('phys-cap-h');
+    const onCapsuleSizeChange = () => {
+        const w = Math.max(1, parseFloat(capW?.value) || 1);
+        const h = Math.max(1, parseFloat(capH?.value) || 1);
+        obj.physicsSize = { ...(obj.physicsSize || {}), capW: w, capH: h };
+        import('./engine.collision-overlay.js').then(m => {
+            if (!state.showCollision) m.setCollisionVisible(true);
+            m.refreshCollisionOverlay();
+        });
+    };
+    capW?.addEventListener('input',  onCapsuleSizeChange);
+    capH?.addEventListener('input',  onCapsuleSizeChange);
+    capW?.addEventListener('change', () => _pushUndo());
+    capH?.addEventListener('change', () => _pushUndo());
+    document.getElementById('phys-size-reset-capsule')?.addEventListener('click', () => {
+        if (obj.physicsSize) { delete obj.physicsSize.capW; delete obj.physicsSize.capH; }
+        _pushUndo();
+        import('./engine.ui.js').then(m => m.syncPixiToInspector?.());
+        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
     });
 
     // ── Box size inputs ───────────────────────────────────
@@ -829,19 +911,28 @@ export function bindPhysicsInspector(obj) {
     });
 
     // "Edit" button — opens shared polygon editor
-    editBtn?.addEventListener('click', () => openPolygonEditor(obj, 'shared'));
+    editBtn?.addEventListener('click', () => {
+        // Edit the first animation frame if it exists — that's what the engine renders.
+        // 'shared' is kept in sync on save so inspector path always reflects frame 0.
+        const firstFrameId = obj.animations?.[obj.activeAnimIndex ?? 0]?.frames?.[0]?.id;
+        openPolygonEditor(obj, firstFrameId || 'shared');
+    });
 
-    // "Auto-fit" button
+    // "Auto-fit" button — callback-based so overlay refreshes AFTER async image load
     document.getElementById('phys-autofit')?.addEventListener('click', () => {
-        _autoFitCollisionShape(obj);
-        _pushUndo();
-        import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
-        // Show toast
-        const toast = document.createElement('div');
-        toast.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:#0a2a1a;border:1px solid #4ade80;color:#4ade80;border-radius:4px;padding:6px 18px;font-size:11px;z-index:99999;pointer-events:none;';
-        toast.textContent = '🎯 Collision shape auto-fitted';
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 2000);
+        _autoFitCollisionShape(obj, () => {
+            _pushUndo();
+            import('./engine.ui.js').then(m => m.syncPixiToInspector?.());
+            import('./engine.collision-overlay.js').then(m => {
+                if (!state.showCollision) m.setCollisionVisible(true);
+                m.refreshCollisionOverlay();
+            });
+            const toast = document.createElement('div');
+            toast.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:#0a2a1a;border:1px solid #4ade80;color:#4ade80;border-radius:4px;padding:6px 18px;font-size:11px;z-index:99999;pointer-events:none;';
+            toast.textContent = '🎯 Collision shape auto-fitted';
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+        });
     });
 
     // Per-frame buttons
@@ -1267,8 +1358,21 @@ export function openPolygonEditor(obj, frameId = 'shared', opts = {}) {
             obj.physicsPolygons[frameId] = pts.map(p => ({ x: p.x, y: p.y }));
             obj.physicsShape = 'polygon';
             obj._polyUnit = 'container';
-            // Legacy compat
-            if (frameId === 'shared') obj.physicsPolygon = obj.physicsPolygons.shared.slice();
+            // Always keep legacy physicsPolygon in sync with shared (used everywhere as fallback)
+            if (frameId === 'shared') {
+                obj.physicsPolygon = obj.physicsPolygons.shared.slice();
+                // Also sync to the first animation frame so the editor preview matches
+                const firstFrameId = obj.animations?.[obj.activeAnimIndex ?? 0]?.frames?.[0]?.id;
+                if (firstFrameId && !obj.physicsPolygons[firstFrameId]) {
+                    obj.physicsPolygons[firstFrameId] = obj.physicsPolygons.shared.slice();
+                }
+            }
+            // If editing first frame, keep shared in sync too so inspector path matches
+            const firstFrameId = obj.animations?.[obj.activeAnimIndex ?? 0]?.frames?.[0]?.id;
+            if (frameId === firstFrameId) {
+                obj.physicsPolygon = pts.map(p => ({ x: p.x, y: p.y }));
+                obj.physicsPolygons.shared = obj.physicsPolygon.slice();
+            }
         }
         import('./engine.ui.js').then(m => m.syncPixiToInspector?.());
         import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());

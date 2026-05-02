@@ -137,6 +137,10 @@ function _drawObjectCollision(obj, sc) {
 
     if (shape === 'circle') {
         _drawRotatedCircle(wx, wy, Math.max(r, 2) * sc.scale.x, rot);
+    } else if (shape === 'capsule') {
+        const capW = (obj.physicsSize?.capW ?? g.w) * sx * sc.scale.x;
+        const capH = (obj.physicsSize?.capH ?? g.h) * sy * sc.scale.y;
+        _drawCapsule(wx, wy, capW, capH, rot);
     } else if ((shape === 'polygon') && _hasPolygon(obj)) {
         const poly = _getPolygon(obj);
         _drawPolygon(objWx, objWy, poly, wsx, wsy, rot);
@@ -232,6 +236,42 @@ function _drawRotatedCircle(cx, cy, r, angle) {
     const ey = cy + Math.sin(angle) * r;
     _layer.moveTo(cx, cy);
     _layer.lineTo(ex, ey);
+}
+
+// Draws a pill/capsule shape: two semicircles joined by straight lines, rotated by angle
+function _drawCapsule(cx, cy, w, h, angle) {
+    // Capsule: pill oriented along the longer axis
+    const r   = Math.min(w, h) / 2;
+    const len = Math.max(w, h) / 2 - r;        // half-length of the straight section
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    // Axis direction (along the long axis of the capsule)
+    const ax = (w >= h) ? cos : -sin;
+    const ay = (w >= h) ? sin :  cos;
+    // Perpendicular
+    const px = -ay, py = ax;
+
+    // 4 corner-ish anchor points on the rectangle part
+    const x1 = cx + ax * len + px * r, y1 = cy + ay * len + py * r;
+    const x2 = cx + ax * len - px * r, y2 = cy + ay * len - py * r;
+    const x3 = cx - ax * len - px * r, y3 = cy - ay * len - py * r;
+    const x4 = cx - ax * len + px * r, y4 = cy - ay * len + py * r;
+
+    const SEGS = 16;
+    const pts = [];
+    // Right semicircle
+    for (let i = 0; i <= SEGS; i++) {
+        const a = angle + (i / SEGS) * Math.PI - Math.PI / 2;
+        pts.push({ x: cx + ax * len + Math.cos(a) * r, y: cy + ay * len + Math.sin(a) * r });
+    }
+    // Left semicircle
+    for (let i = 0; i <= SEGS; i++) {
+        const a = angle + (i / SEGS) * Math.PI + Math.PI / 2;
+        pts.push({ x: cx - ax * len + Math.cos(a) * r, y: cy - ay * len + Math.sin(a) * r });
+    }
+    if (pts.length === 0) return;
+    _layer.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) _layer.lineTo(pts[i].x, pts[i].y);
+    _layer.closePath();
 }
 
 function _drawPolygon(cx, cy, poly, wsx, wsy, angle) {
@@ -506,8 +546,11 @@ function _getPolygon(obj) {
     _migrate(obj);
     const map = obj.physicsPolygons;
     if (!map) return obj.physicsPolygon || null;
+    // Always prefer the first frame polygon — that is what the engine renders in edit mode.
     const anim    = obj.animations?.[obj.activeAnimIndex ?? 0];
     const frameId = anim?.frames?.[0]?.id;
     if (frameId && Array.isArray(map[frameId]) && map[frameId].length >= 3) return map[frameId];
-    return map.shared || null;
+    // Fall back to shared, then legacy single polygon
+    if (Array.isArray(map.shared) && map.shared.length >= 3) return map.shared;
+    return obj.physicsPolygon || null;
 }

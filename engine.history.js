@@ -32,8 +32,29 @@ function _captureScene() {
                 x: obj.x, y: obj.y, scaleX: obj.scale.x, scaleY: obj.scale.y,
                 rotation: obj.rotation, unityZ: obj.unityZ || 0,
                 tint: obj.spriteGraphic?.tint ?? 0xFFFFFF,
+                visible: obj.visible !== false,
+                alpha: obj.alpha ?? 1,
                 animations: obj.animations ? JSON.parse(JSON.stringify(obj.animations)) : [],
                 activeAnimIndex: obj.activeAnimIndex || 0,
+                // ── Physics ───────────────────────────────────────────
+                physicsBody:              obj.physicsBody              ?? 'none',
+                physicsShape:             obj.physicsShape             ?? 'box',
+                physicsFriction:          obj.physicsFriction          ?? 0.3,
+                physicsRestitution:       obj.physicsRestitution       ?? 0.1,
+                physicsDensity:           obj.physicsDensity           ?? 0.001,
+                physicsGravityScale:      obj.physicsGravityScale      ?? 1,
+                physicsGravityXScale:     obj.physicsGravityXScale     ?? 1,
+                physicsLinearDamping:     obj.physicsLinearDamping     ?? 0,
+                physicsAngularDamping:    obj.physicsAngularDamping    ?? 0,
+                physicsFixedRotation:     !!obj.physicsFixedRotation,
+                physicsIsSensor:          !!obj.physicsIsSensor,
+                physicsCollisionCategory: obj.physicsCollisionCategory ?? 1,
+                physicsCollisionMask:     obj.physicsCollisionMask     ?? -1,
+                physicsSize:     obj.physicsSize     ? JSON.parse(JSON.stringify(obj.physicsSize))     : null,
+                physicsPolygon:  obj.physicsPolygon  ? JSON.parse(JSON.stringify(obj.physicsPolygon))  : null,
+                physicsPolygons: obj.physicsPolygons ? JSON.parse(JSON.stringify(obj.physicsPolygons)) : null,
+                _polyUnit:       obj._polyUnit || null,
+                _collisionShapeInit: !!obj._collisionShapeInit,
             };
         }),
         audioSources: state.audioSources.map(s => ({
@@ -142,11 +163,34 @@ function _applyScene(snap) {
             if (!obj) return;
             obj.label = s.label; obj.scale.x = s.scaleX; obj.scale.y = s.scaleY;
             obj.rotation = s.rotation; obj.unityZ = s.unityZ; obj.prefabId = s.prefabId || null;
+            if (typeof s.visible === 'boolean') obj.visible = s.visible;
+            if (typeof s.alpha   === 'number')  obj.alpha   = s.alpha;
             if (obj.spriteGraphic?.tint !== undefined) obj.spriteGraphic.tint = s.tint;
             if (s.animations?.length) {
                 obj.animations = JSON.parse(JSON.stringify(s.animations));
                 obj.activeAnimIndex = s.activeAnimIndex || 0;
+                // Re-apply animation frames so the correct sprite is showing
+                import('./engine.animator.js').then(m => m.reapplyAnimationToObject?.(obj));
             }
+            // ── Restore physics ───────────────────────────────────
+            obj.physicsBody              = s.physicsBody              ?? 'none';
+            obj.physicsShape             = s.physicsShape             ?? 'box';
+            obj.physicsFriction          = s.physicsFriction          ?? 0.3;
+            obj.physicsRestitution       = s.physicsRestitution       ?? 0.1;
+            obj.physicsDensity           = s.physicsDensity           ?? 0.001;
+            obj.physicsGravityScale      = s.physicsGravityScale      ?? 1;
+            obj.physicsGravityXScale     = s.physicsGravityXScale     ?? 1;
+            obj.physicsLinearDamping     = s.physicsLinearDamping     ?? 0;
+            obj.physicsAngularDamping    = s.physicsAngularDamping    ?? 0;
+            obj.physicsFixedRotation     = !!s.physicsFixedRotation;
+            obj.physicsIsSensor          = !!s.physicsIsSensor;
+            obj.physicsCollisionCategory = s.physicsCollisionCategory ?? 1;
+            obj.physicsCollisionMask     = s.physicsCollisionMask     ?? -1;
+            if (s.physicsSize)     obj.physicsSize     = JSON.parse(JSON.stringify(s.physicsSize));
+            if (s.physicsPolygon)  obj.physicsPolygon  = JSON.parse(JSON.stringify(s.physicsPolygon));
+            if (s.physicsPolygons) obj.physicsPolygons = JSON.parse(JSON.stringify(s.physicsPolygons));
+            if (s._polyUnit)       obj._polyUnit       = s._polyUnit;
+            obj._collisionShapeInit = !!s._collisionShapeInit;
             if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
         });
     });
