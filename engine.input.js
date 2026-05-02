@@ -51,8 +51,9 @@ export function initCameraControls() {
 // ── Keyboard Shortcuts ────────────────────────────────────────
 export function initKeyboardShortcuts() {
     window.addEventListener('keydown', (e) => {
-        // Ignore when typing in an input
-        if (e.target.tagName === 'INPUT') return;
+        // Ignore when typing in an input, textarea or select
+        const tag = e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
         // Block editor shortcuts during play mode
         if (state.isPlaying) return;
 
@@ -73,6 +74,22 @@ export function initKeyboardShortcuts() {
                 break;
             case 'r': case 'R':
                 document.getElementById('btn-tool-scale')?.click();
+                break;
+            case 'f': case 'F':
+                // Focus editor camera on selected object
+                if (state.gameObject) {
+                    const obj = state.gameObject;
+                    const sc  = state.sceneContainer;
+                    const renderer = state.app.renderer;
+                    const cx = renderer.width  / 2;
+                    const cy = renderer.height / 2;
+                    // Get world position of the object
+                    const gp = obj.getGlobalPosition ? obj.getGlobalPosition() : { x: obj.x, y: obj.y };
+                    // Shift scene container so the object lands at screen centre
+                    sc.x += cx - gp.x;
+                    sc.y += cy - gp.y;
+                    import('./engine.playmode.js').then(m => m.updateCameraBoundsIfVisible?.());
+                }
                 break;
         }
     });

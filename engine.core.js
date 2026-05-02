@@ -46,6 +46,13 @@ export function startEngine() {
     });
     container.appendChild(state.app.view);
 
+    // ResizeObserver ensures the canvas fills correctly whenever panels are shown/hidden or resized
+    const _ro = new ResizeObserver(() => { state.app?.resize?.(); });
+    _ro.observe(container);
+
+    // Also handle window-level resize (e.g. browser zoom changes devicePixelRatio)
+    window.addEventListener('resize', () => { state.app?.resize?.(); });
+
     // Prevent browser context menu on canvas so right-click works for our context menu
     state.app.view.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -166,15 +173,25 @@ function initMenus() {
             toggleMenu(windowBtn, [
                 {
                     label: (hVis ? '✓ ' : '    ') + 'Hierarchy',
-                    action: () => { if (hierarchy) hierarchy.style.display = hVis ? 'none' : ''; }
+                    action: () => {
+                        if (hierarchy) hierarchy.style.display = hVis ? 'none' : '';
+                        // Force PIXI to recalculate canvas size after panel toggle
+                        requestAnimationFrame(() => state.app?.resize?.());
+                    }
                 },
                 {
                     label: (iVis ? '✓ ' : '    ') + 'Inspector',
-                    action: () => { if (inspector) inspector.style.display = iVis ? 'none' : ''; }
+                    action: () => {
+                        if (inspector) inspector.style.display = iVis ? 'none' : '';
+                        requestAnimationFrame(() => state.app?.resize?.());
+                    }
                 },
                 {
                     label: (bVis ? '✓ ' : '    ') + 'Assets / Console',
-                    action: () => { if (bottom) bottom.style.display = bVis ? 'none' : ''; }
+                    action: () => {
+                        if (bottom) bottom.style.display = bVis ? 'none' : '';
+                        requestAnimationFrame(() => state.app?.resize?.());
+                    }
                 },
                 { separator: true },
                 { label: '⊞  Reset Layout', action: () => {
@@ -397,6 +414,7 @@ function makeHorizResizer(handle, panel, side, minW, maxW) {
         const delta = side === 'left' ? e.clientX - startX : startX - e.clientX;
         const newW  = Math.max(minW, Math.min(maxW, startW + delta));
         panel.style.width = newW + 'px';
+        state.app?.resize?.();
     });
 
     document.addEventListener('mouseup', () => {
@@ -404,6 +422,7 @@ function makeHorizResizer(handle, panel, side, minW, maxW) {
         dragging = false;
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
+        state.app?.resize?.();
     });
 }
 
@@ -423,6 +442,7 @@ function makeVertResizer(handle, panel, minH, maxH) {
         if (!dragging) return;
         const newH = Math.max(minH, Math.min(maxH, startH - (e.clientY - startY)));
         panel.style.height = newH + 'px';
+        state.app?.resize?.();
     });
 
     document.addEventListener('mouseup', () => {
@@ -430,6 +450,7 @@ function makeVertResizer(handle, panel, minH, maxH) {
         dragging = false;
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
+        state.app?.resize?.();
     });
 }
 
@@ -467,10 +488,19 @@ function _copySelected() {
             animations: obj.animations ? JSON.parse(JSON.stringify(obj.animations)) : [],
             activeAnimIndex: obj.activeAnimIndex || 0,
             // ── Physics / collision settings ─────────────────────
-            physicsBody:        obj.physicsBody        ?? 'none',
-            physicsShape:       obj.physicsShape       ?? 'box',
-            physicsFriction:    obj.physicsFriction    ?? 0.3,
-            physicsRestitution: obj.physicsRestitution ?? 0.1,
+            physicsBody:              obj.physicsBody              ?? 'none',
+            physicsShape:             obj.physicsShape             ?? 'box',
+            physicsFriction:          obj.physicsFriction          ?? 0.3,
+            physicsRestitution:       obj.physicsRestitution       ?? 0.1,
+            physicsDensity:           obj.physicsDensity           ?? 0.001,
+            physicsGravityScale:      obj.physicsGravityScale      ?? 1,
+            physicsGravityXScale:     obj.physicsGravityXScale     ?? 1,
+            physicsLinearDamping:     obj.physicsLinearDamping     ?? 0,
+            physicsAngularDamping:    obj.physicsAngularDamping    ?? 0,
+            physicsFixedRotation:     !!obj.physicsFixedRotation,
+            physicsIsSensor:          !!obj.physicsIsSensor,
+            physicsCollisionCategory: obj.physicsCollisionCategory ?? 1,
+            physicsCollisionMask:     obj.physicsCollisionMask     ?? -1,
             physicsSize:        obj.physicsSize        ? JSON.parse(JSON.stringify(obj.physicsSize))     : null,
             physicsPolygon:     obj.physicsPolygon     ? JSON.parse(JSON.stringify(obj.physicsPolygon))  : null,
             physicsPolygons:    obj.physicsPolygons    ? JSON.parse(JSON.stringify(obj.physicsPolygons)) : null,
@@ -497,6 +527,7 @@ function _pasteObject() {
             if (!obj) return;
             obj.label = cb.label + ' (copy)';
             obj.lightProps = JSON.parse(JSON.stringify(cb.lightProps));
+            obj.unityZ = cb.unityZ || 0;
             _buildLightHelper(obj);
             state.clipboard = { ...cb, x: cb.x + 25, y: cb.y + 25 };
             _logConsole('⎗ Pasted: ' + obj.label, '#8f8');
@@ -564,10 +595,19 @@ function _pasteObject() {
         }
 
         // ── Physics / collision settings ─────────────────────────
-        if (cb.physicsBody)        obj.physicsBody        = cb.physicsBody;
-        if (cb.physicsShape)       obj.physicsShape       = cb.physicsShape;
-        if (typeof cb.physicsFriction    === 'number') obj.physicsFriction    = cb.physicsFriction;
-        if (typeof cb.physicsRestitution === 'number') obj.physicsRestitution = cb.physicsRestitution;
+        if (cb.physicsBody)                          obj.physicsBody              = cb.physicsBody;
+        if (cb.physicsShape)                         obj.physicsShape             = cb.physicsShape;
+        if (typeof cb.physicsFriction    === 'number') obj.physicsFriction          = cb.physicsFriction;
+        if (typeof cb.physicsRestitution === 'number') obj.physicsRestitution       = cb.physicsRestitution;
+        if (typeof cb.physicsDensity     === 'number') obj.physicsDensity           = cb.physicsDensity;
+        if (typeof cb.physicsGravityScale  === 'number') obj.physicsGravityScale    = cb.physicsGravityScale;
+        if (typeof cb.physicsGravityXScale === 'number') obj.physicsGravityXScale   = cb.physicsGravityXScale;
+        if (typeof cb.physicsLinearDamping  === 'number') obj.physicsLinearDamping  = cb.physicsLinearDamping;
+        if (typeof cb.physicsAngularDamping === 'number') obj.physicsAngularDamping = cb.physicsAngularDamping;
+        obj.physicsFixedRotation     = !!cb.physicsFixedRotation;
+        obj.physicsIsSensor          = !!cb.physicsIsSensor;
+        if (typeof cb.physicsCollisionCategory === 'number') obj.physicsCollisionCategory = cb.physicsCollisionCategory;
+        if (typeof cb.physicsCollisionMask     === 'number') obj.physicsCollisionMask     = cb.physicsCollisionMask;
         if (cb.physicsSize)     obj.physicsSize     = JSON.parse(JSON.stringify(cb.physicsSize));
         if (cb.physicsPolygon)  obj.physicsPolygon  = JSON.parse(JSON.stringify(cb.physicsPolygon));
         if (cb.physicsPolygons) {
@@ -608,7 +648,7 @@ function _logConsole(msg, color = '#aaa') {
 function initGlobalShortcuts() {
     document.addEventListener('keydown', (e) => {
         const tag = document.activeElement?.tagName;
-        const inInput = tag === 'INPUT' || tag === 'TEXTAREA';
+        const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 
         // Escape = stop play mode
         if (e.code === 'Escape' && state.isPlaying) {

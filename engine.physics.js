@@ -332,12 +332,14 @@ export async function startPhysics() {
         const { Body: B } = window.Matter;
         for (const { obj, body, type } of _bodies) {
             if (type === 'static' || type === 'kinematic') continue;
-            const scale = (obj.physicsGravityScale ?? 1) - 1; // 1 = default, 0 = no extra force needed
-            if (scale !== 0) {
-                // Matter already applies world gravity; we add the delta
-                const gx = _worldGravity.x * _worldGravity.scale * scale * body.mass;
-                const gy = _worldGravity.y * _worldGravity.scale * scale * body.mass;
-                B.applyForce(body, body.position, { x: gx, y: gy });
+            // Y gravity: scale relative to world gravity (1.0 = normal, 0 = weightless, 2 = double)
+            const scaleY = (obj.physicsGravityScale  ?? 1) - 1; // delta above the base world gravity
+            // X gravity: per-object horizontal gravity multiplier (1 = none extra, 2 = double world X, etc.)
+            const scaleX = (obj.physicsGravityXScale ?? 1) - 1; // delta above base world X gravity
+            const forceX = _worldGravity.x * _worldGravity.scale * scaleX * body.mass;
+            const forceY = _worldGravity.y * _worldGravity.scale * scaleY * body.mass;
+            if (forceX !== 0 || forceY !== 0) {
+                B.applyForce(body, body.position, { x: forceX, y: forceY });
             }
         }
 
@@ -453,6 +455,7 @@ export function buildPhysicsInspectorHTML(obj) {
     const rest   = obj.physicsRestitution     ?? 0.1;
     const dens   = obj.physicsDensity         ?? 0.001;
     const grav   = obj.physicsGravityScale    ?? 1;
+    const gravX  = obj.physicsGravityXScale   ?? 1;
     const ldamp  = obj.physicsLinearDamping   ?? 0;
     const adamp  = obj.physicsAngularDamping  ?? 0;
     const fixRot = !!obj.physicsFixedRotation;
@@ -579,6 +582,10 @@ export function buildPhysicsInspectorHTML(obj) {
           <div class="prop-row">
             <span class="prop-label" title="Multiplier applied to world gravity for this body">Gravity scale</span>
             <input id="phys-gravity-scale" type="number" value="${grav}" min="-10" max="10" step="0.1" style="width:60px;${_inp()}">
+          </div>
+          <div class="prop-row">
+            <span class="prop-label" title="Multiplier applied to horizontal (X) gravity for this body">X Gravity mult</span>
+            <input id="phys-gravity-x-scale" type="number" value="${gravX}" min="-10" max="10" step="0.1" style="width:60px;${_inp()}">
           </div>
           <div class="prop-row">
             <span class="prop-label" title="Resistance to linear movement (air drag)">Linear damp</span>
@@ -861,6 +868,10 @@ export function bindPhysicsInspector(obj) {
     });
     document.getElementById('phys-gravity-scale')?.addEventListener('change', (e) => {
         obj.physicsGravityScale = parseFloat(e.target.value) ?? 1;
+        _pushUndo();
+    });
+    document.getElementById('phys-gravity-x-scale')?.addEventListener('change', (e) => {
+        obj.physicsGravityXScale = parseFloat(e.target.value) ?? 1;
         _pushUndo();
     });
     document.getElementById('phys-linear-damp')?.addEventListener('change', (e) => {
@@ -1337,29 +1348,47 @@ function _defaultCircle(r, n = 12) {
 
 export function snapshotPhysics(obj) {
     return {
-        physicsBody:        obj.physicsBody        ?? 'none',
-        physicsFriction:    obj.physicsFriction    ?? 0.3,
-        physicsRestitution: obj.physicsRestitution ?? 0.1,
-        physicsShape:       obj.physicsShape       ?? 'box',
-        physicsSize:        obj.physicsSize        ? JSON.parse(JSON.stringify(obj.physicsSize))  : null,
-        physicsPolygon:     obj.physicsPolygon     ? JSON.parse(JSON.stringify(obj.physicsPolygon)) : null,
-        physicsPolygons:    obj.physicsPolygons    ? JSON.parse(JSON.stringify(obj.physicsPolygons)) : null,
-        _polyUnit:          obj._polyUnit || null,
-        _collisionShapeInit: !!obj._collisionShapeInit,
+        physicsBody:              obj.physicsBody              ?? 'none',
+        physicsFriction:          obj.physicsFriction          ?? 0.3,
+        physicsRestitution:       obj.physicsRestitution       ?? 0.1,
+        physicsShape:             obj.physicsShape             ?? 'box',
+        physicsDensity:           obj.physicsDensity           ?? 0.001,
+        physicsGravityScale:      obj.physicsGravityScale      ?? 1,
+        physicsGravityXScale:     obj.physicsGravityXScale     ?? 1,
+        physicsLinearDamping:     obj.physicsLinearDamping     ?? 0,
+        physicsAngularDamping:    obj.physicsAngularDamping    ?? 0,
+        physicsFixedRotation:     !!obj.physicsFixedRotation,
+        physicsIsSensor:          !!obj.physicsIsSensor,
+        physicsCollisionCategory: obj.physicsCollisionCategory ?? 1,
+        physicsCollisionMask:     obj.physicsCollisionMask     ?? -1,
+        physicsSize:              obj.physicsSize        ? JSON.parse(JSON.stringify(obj.physicsSize))  : null,
+        physicsPolygon:           obj.physicsPolygon     ? JSON.parse(JSON.stringify(obj.physicsPolygon)) : null,
+        physicsPolygons:          obj.physicsPolygons    ? JSON.parse(JSON.stringify(obj.physicsPolygons)) : null,
+        _polyUnit:                obj._polyUnit || null,
+        _collisionShapeInit:      !!obj._collisionShapeInit,
     };
 }
 
 export function restorePhysics(obj, snap) {
     if (!snap) return;
-    obj.physicsBody        = snap.physicsBody        ?? 'none';
-    obj.physicsFriction    = snap.physicsFriction    ?? 0.3;
-    obj.physicsRestitution = snap.physicsRestitution ?? 0.1;
-    obj.physicsShape       = snap.physicsShape       ?? 'box';
-    obj.physicsSize        = snap.physicsSize        ? JSON.parse(JSON.stringify(snap.physicsSize))  : null;
-    obj.physicsPolygon     = snap.physicsPolygon     ? JSON.parse(JSON.stringify(snap.physicsPolygon))  : null;
-    obj.physicsPolygons    = snap.physicsPolygons    ? JSON.parse(JSON.stringify(snap.physicsPolygons)) : null;
-    obj._polyUnit          = snap._polyUnit || null;
-    obj._collisionShapeInit = !!snap._collisionShapeInit;
+    obj.physicsBody              = snap.physicsBody              ?? 'none';
+    obj.physicsFriction          = snap.physicsFriction          ?? 0.3;
+    obj.physicsRestitution       = snap.physicsRestitution       ?? 0.1;
+    obj.physicsShape             = snap.physicsShape             ?? 'box';
+    obj.physicsDensity           = snap.physicsDensity           ?? 0.001;
+    obj.physicsGravityScale      = snap.physicsGravityScale      ?? 1;
+    obj.physicsGravityXScale     = snap.physicsGravityXScale     ?? 1;
+    obj.physicsLinearDamping     = snap.physicsLinearDamping     ?? 0;
+    obj.physicsAngularDamping    = snap.physicsAngularDamping    ?? 0;
+    obj.physicsFixedRotation     = !!snap.physicsFixedRotation;
+    obj.physicsIsSensor          = !!snap.physicsIsSensor;
+    obj.physicsCollisionCategory = snap.physicsCollisionCategory ?? 1;
+    obj.physicsCollisionMask     = snap.physicsCollisionMask     ?? -1;
+    obj.physicsSize              = snap.physicsSize        ? JSON.parse(JSON.stringify(snap.physicsSize))  : null;
+    obj.physicsPolygon           = snap.physicsPolygon     ? JSON.parse(JSON.stringify(snap.physicsPolygon))  : null;
+    obj.physicsPolygons          = snap.physicsPolygons    ? JSON.parse(JSON.stringify(snap.physicsPolygons)) : null;
+    obj._polyUnit                = snap._polyUnit || null;
+    obj._collisionShapeInit      = !!snap._collisionShapeInit;
 }
 
 // ─────────────────────────────────────────────────────────────
