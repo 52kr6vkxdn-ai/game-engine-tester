@@ -51,6 +51,8 @@ export function syncPixiToInspector() {
         if (spriteSection)    spriteSection.style.display    = 'none';
         if (animSection)      animSection.style.display      = 'none';
         if (transformSection) transformSection.style.display = 'none';
+        const scriptSection = document.getElementById('inspector-script-section');
+        if (scriptSection) scriptSection.style.display = 'none';
         const lightMount = document.getElementById('light-inspector-mount');
         if (lightMount) lightMount.innerHTML = '';
         // Show scene settings panel
@@ -190,6 +192,24 @@ export function syncPixiToInspector() {
         } else {
             pfSection.style.display = 'none';
         }
+    }
+
+    // Script section — show for regular sprite objects only
+    const scriptSection = document.getElementById('inspector-script-section');
+    if (scriptSection && go.isImage && !go.isLight && !go.isTilemap && !go.isAutoTilemap) {
+        scriptSection.style.display = '';
+        const badge   = document.getElementById('inspector-script-badge');
+        const nameEl  = document.getElementById('inspector-script-name');
+        if (badge && nameEl) {
+            if (go.scriptName) {
+                badge.style.display = 'block';
+                nameEl.textContent  = go.scriptName + '.js';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+    } else if (scriptSection) {
+        scriptSection.style.display = 'none';
     }
 }
 
@@ -528,6 +548,26 @@ export function initInspectorListeners() {
         searchInput.addEventListener('input', _applyHierarchySearch);
         searchInput.addEventListener('keydown', e => e.stopPropagation()); // prevent gizmo shortcuts
     }
+
+    // ── Script component buttons ───────────────────────────────
+    document.getElementById('btn-create-script')?.addEventListener('click', () => {
+        const go = state.gameObject;
+        if (!go) return;
+        import('./engine.scripting.js').then(m => m.promptCreateScript(go));
+    });
+    document.getElementById('btn-load-script')?.addEventListener('click', () => {
+        const go = state.gameObject;
+        if (!go) return;
+        import('./engine.scripting.js').then(m => m.promptLoadScript(go));
+    });
+    document.getElementById('btn-script-edit-attached')?.addEventListener('click', () => {
+        const go = state.gameObject;
+        if (!go || !go.scriptName) return;
+        import('./engine.scripting.js').then(async m => {
+            const record = await m.loadScript(go.scriptName);
+            m.openScriptEditor(go, go.scriptName, record?.code ?? '');
+        });
+    });
 }
 
 // ── Gizmo Mode ────────────────────────────────────────────────

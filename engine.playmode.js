@@ -26,6 +26,8 @@ export function enterPlayMode() {
     import('./engine.physics.js').then(m => m.startPhysics());
     // Start 3D positional audio
     import('./engine.audio.js').then(m => m.startPlayAudio());
+    // Start user scripts (sandboxed, play-mode only)
+    import('./engine.scripting.js').then(m => m.startScripts());
     _logConsole('▶ Play Mode — Space or ■ to stop', '#4ade80');
 }
 
@@ -57,6 +59,8 @@ export function stopPlayMode() {
     import('./engine.physics.js').then(m => m.stopPhysics());
     // Stop 3D positional audio
     import('./engine.audio.js').then(m => m.stopPlayAudio());
+    // Stop user scripts
+    import('./engine.scripting.js').then(m => m.stopScripts());
     _blockEditorInput(false);    // restore input
     _showEditorUI();
     // Restore audio source visuals (hidden during play mode)
@@ -438,6 +442,8 @@ function _snapshotScene() {
                 // ── Visibility / alpha ──────────────────────────────
                 visible: obj.visible !== false,
                 alpha:   obj.alpha   ?? 1,
+                // ── Script ─────────────────────────────────────────
+                scriptName: obj.scriptName ?? null,
             };
         }),
         camX: state.sceneContainer?.x ?? 0, camY: state.sceneContainer?.y ?? 0,
@@ -505,6 +511,8 @@ function _restoreScene(snap) {
                 // ── Visibility / alpha ──────────────────────────────
                 obj.visible = s.visible !== false;
                 obj.alpha   = s.alpha   ?? 1;
+                // ── Script ─────────────────────────────────────────
+                obj.scriptName = s.scriptName ?? null;
                 if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
                 return obj;
             }

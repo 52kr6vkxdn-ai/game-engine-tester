@@ -298,6 +298,34 @@
         <!-- Light Inspector Mount (dynamic) -->
         <div id="light-inspector-mount"></div>
 
+        <!-- Script Component -->
+        <div id="inspector-script-section" class="component-block" style="display:none;border-left:3px solid #3a72a5;">
+            <div class="component-header" style="background:#111827;">
+                <svg viewBox="0 0 24 24" class="comp-icon" style="color:#7cb9f0;"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                <span style="color:#7cb9f0;font-weight:600;">Script</span>
+            </div>
+            <div class="component-body" style="background:#0d1117;">
+                <div id="inspector-script-badge" style="display:none;margin-bottom:8px;">
+                    <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;background:#0d1f33;border:1px solid #1e3a5a;border-radius:4px;">
+                        <svg viewBox="0 0 24 24" style="width:11px;height:11px;flex-shrink:0;fill:none;stroke:#7cb9f0;stroke-width:2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                        <span id="inspector-script-name" style="color:#7cb9f0;font-size:11px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">—</span>
+                        <button id="btn-script-edit-attached" style="background:none;border:none;color:#4ade80;font-size:10px;cursor:pointer;padding:1px 4px;">Edit</button>
+                    </div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:5px;">
+                    <button id="btn-create-script" class="btn-secondary full-width" style="border-color:#2a5a8a;color:#7cb9f0;">
+                        <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Create Script
+                    </button>
+                    <button id="btn-load-script" class="btn-secondary full-width">
+                        <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                        Load Script
+                    </button>
+                </div>
+                <div style="color:#3a3a5a;font-size:10px;margin-top:8px;line-height:1.5;">Scripts run in Play Mode only.<br>Use onUpdate(fn) and onStart(fn) to write logic.</div>
+            </div>
+        </div>
+
         <!-- Prefab Section -->
         <div id="inspector-prefab-section" class="component-block" style="display:none; border-left:3px solid #4a8a4a;">
             <div class="component-header" style="background:#1a2a1a;">

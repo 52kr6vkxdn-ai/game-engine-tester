@@ -34,6 +34,7 @@ function _captureScene() {
                 tint: obj.spriteGraphic?.tint ?? 0xFFFFFF,
                 visible: obj.visible !== false,
                 alpha: obj.alpha ?? 1,
+                scriptName: obj.scriptName ?? null,
                 animations: obj.animations ? JSON.parse(JSON.stringify(obj.animations)) : [],
                 activeAnimIndex: obj.activeAnimIndex || 0,
                 // ── Physics ───────────────────────────────────────────
@@ -165,6 +166,7 @@ function _applyScene(snap) {
             obj.rotation = s.rotation; obj.unityZ = s.unityZ; obj.prefabId = s.prefabId || null;
             if (typeof s.visible === 'boolean') obj.visible = s.visible;
             if (typeof s.alpha   === 'number')  obj.alpha   = s.alpha;
+            if (s.scriptName !== undefined)      obj.scriptName = s.scriptName ?? null;
             if (obj.spriteGraphic?.tint !== undefined) obj.spriteGraphic.tint = s.tint;
             if (s.animations?.length) {
                 obj.animations = JSON.parse(JSON.stringify(s.animations));

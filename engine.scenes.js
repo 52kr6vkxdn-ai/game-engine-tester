@@ -142,6 +142,8 @@ function _saveCurrentScene() {
             // ── Visibility / alpha ──────────────────────────────
             visible: obj.visible !== false,
             alpha:   obj.alpha   ?? 1,
+            // ── Script ─────────────────────────────────────────
+            scriptName: obj.scriptName ?? null,
         };
     });
 
@@ -247,6 +249,8 @@ function _loadScene(index) {
                 // ── Visibility / alpha ──────────────────────────────
                 obj.visible = s.visible !== false;
                 obj.alpha   = s.alpha   ?? 1;
+                // ── Script ─────────────────────────────────────────
+                obj.scriptName = s.scriptName ?? null;
                 if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
             });
         });
