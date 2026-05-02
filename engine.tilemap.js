@@ -54,6 +54,7 @@ export function createTilemap(x = 0, y = 0) {
     container.on('pointerdown', e => {
         if (state.isPlaying) { e.stopPropagation(); return; }
         if (e.button !== 0) return;
+        e.stopPropagation();
         import('./engine.objects.js').then(m => m.selectObject(container));
     });
 

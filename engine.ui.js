@@ -501,8 +501,8 @@ export function setGizmoMode(mode) {
             obj._grpTranslate.visible = false;
             obj._grpRotate.visible    = false;
             obj._grpScale.visible     = false;
-        } else if (obj.isLight) {
-            // Lights: translate always visible, no rotate/scale gizmo
+        } else if (obj.isLight || obj.isTilemap || obj.isAutoTilemap) {
+            // Lights and tilemaps: translate-only gizmo
             obj._grpTranslate.visible = true;
             obj._grpRotate.visible    = false;
             obj._grpScale.visible     = false;

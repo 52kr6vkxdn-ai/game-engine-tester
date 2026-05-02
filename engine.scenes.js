@@ -189,12 +189,14 @@ function _loadScene(index) {
     // Restore audio sources
     import('./engine.audio.js').then(m => m.restoreAudioSources(snap?.audioSources || []));
 
-    // Restore scene settings (bg color, size, camera preset)
-    if (snap?.sceneSettings) {
-        Object.assign(state.sceneSettings, snap.sceneSettings);
-        if (state.app?.renderer) state.app.renderer.background.color = state.sceneSettings.bgColor;
-        import('./engine.playmode.js').then(m => m.drawCameraBounds());
-    }
+    // Restore scene settings — always reset so each scene is isolated
+    const ss = snap?.sceneSettings;
+    state.sceneSettings = ss
+        ? JSON.parse(JSON.stringify(ss))
+        : { bgColor: 0x282828, gameWidth: 1280, gameHeight: 720, cameraPreset: 'landscape-desktop' };
+    if (state.app?.renderer) state.app.renderer.background.color = state.sceneSettings.bgColor;
+    import('./engine.playmode.js').then(m => m.drawCameraBounds());
+    import('./engine.ui.js').then(m => m.refreshSceneSettingsPanel());
 
     if (snap?.objects?.length) {
         const restoreAll = snap.objects.map(s => {
@@ -268,11 +270,13 @@ function _loadScene(index) {
 // ── Empty snapshot (new blank scene) ─────────────────────────
 function _emptySnapshot() {
     return {
-        objects:   [],
-        camX:      null,
-        camY:      null,
-        camScaleX: 1,
-        camScaleY: 1,
+        objects:      [],
+        audioSources: [],
+        sceneSettings: { bgColor: 0x282828, gameWidth: 1280, gameHeight: 720, cameraPreset: 'landscape-desktop' },
+        camX:         null,
+        camY:         null,
+        camScaleX:    1,
+        camScaleY:    1,
     };
 }
 

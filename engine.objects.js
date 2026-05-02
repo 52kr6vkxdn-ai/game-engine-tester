@@ -104,7 +104,8 @@ export function selectObject(obj) {
         state.spriteBox      = obj.spriteGraphic || null;
 
         if (obj._grpTranslate) {
-            if (obj.isLight) {
+            if (obj.isLight || obj.isTilemap || obj.isAutoTilemap) {
+                // Lights and tilemaps: translate gizmo only
                 obj._grpTranslate.visible = true;
                 obj._grpRotate.visible    = false;
                 obj._grpScale.visible     = false;

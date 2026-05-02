@@ -59,7 +59,11 @@ export function initKeyboardShortcuts() {
         switch (e.key) {
             case 'Delete':
             case 'Backspace':
-                deleteSelected();
+                if (state._selectedAudioSource) {
+                    import('./engine.audio.js').then(m => m.removeAudioSource(state._selectedAudioSource));
+                } else {
+                    deleteSelected();
+                }
                 break;
             case 'w': case 'W':
                 document.getElementById('btn-tool-translate')?.click();
@@ -192,15 +196,34 @@ export function initGizmoDrag() {
     app.stage.on('pointerup',        onDragEnd);
     app.stage.on('pointerupoutside', onDragEnd);
 
+    // Click on empty space → deselect everything + show scene settings
+    app.stage.on('pointerdown', (e) => {
+        if (state.isPlaying) return;
+        if (e.button !== 0) return;
+        // Deselect any game object
+        if (state.gameObject) {
+            const oldGizmo = state.gameObject._gizmoContainer;
+            if (oldGizmo) oldGizmo.visible = false;
+            state.gameObject = state.gizmoContainer = state.grpTranslate =
+                state.grpRotate = state.grpScale = state._gizmoHandles = state.spriteBox = null;
+        }
+        // Deselect audio source and show scene settings panel in inspector
+        import('./engine.ui.js').then(m => m.deselectAudioSource());
+    });
+
     // Store binder so new objects can register
+    // Tilemaps / auto-tilemaps: translate-only (no scale, no rotate)
     state._bindGizmoHandles = (obj) => {
         const h = obj._gizmoHandles;
+        const isTilelike = obj.isTilemap || obj.isAutoTilemap;
         h.transX.on('pointerdown',      e => onDragStart(e, 'tX', obj));
         h.transY.on('pointerdown',      e => onDragStart(e, 'tY', obj));
         h.transCenter.on('pointerdown', e => onDragStart(e, 'tC', obj));
-        h.scaleX.on('pointerdown',      e => onDragStart(e, 'sX', obj));
-        h.scaleY.on('pointerdown',      e => onDragStart(e, 'sY', obj));
-        h.scaleCenter.on('pointerdown', e => onDragStart(e, 'sC', obj));
-        h.rotRing.on('pointerdown',     e => onDragStart(e, 'r',  obj));
+        if (!isTilelike) {
+            h.scaleX.on('pointerdown',      e => onDragStart(e, 'sX', obj));
+            h.scaleY.on('pointerdown',      e => onDragStart(e, 'sY', obj));
+            h.scaleCenter.on('pointerdown', e => onDragStart(e, 'sC', obj));
+            h.rotRing.on('pointerdown',     e => onDragStart(e, 'r',  obj));
+        }
     };
 }

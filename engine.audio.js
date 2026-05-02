@@ -374,11 +374,14 @@ export async function startPlayAudio() {
 
             const panner = ctx.createPanner();
             panner.panningModel  = 'HRTF';
-            panner.distanceModel = 'inverse';
-            panner.refDistance   = PIXELS_PER_UNIT;
-            panner.maxDistance   = src.range;
+            // 'linear' model: gain = 1 - rolloff*(dist-ref)/(max-ref)
+            // → reaches 0 exactly at the blue circle edge (src.range px → units)
+            const rangeU = src.range / PIXELS_PER_UNIT;
+            panner.distanceModel = 'linear';
+            panner.refDistance   = Math.max(0.01, rangeU * 0.1); // full vol within 10% of range
+            panner.maxDistance   = Math.max(0.02, rangeU);
             panner.rolloffFactor = 1;
-            panner.setPosition(src.x, -src.y, 0);
+            panner.setPosition(src.x / PIXELS_PER_UNIT, -src.y / PIXELS_PER_UNIT, 0);
 
             bufSrc.connect(gainNode);
             gainNode.connect(panner);
@@ -405,15 +408,18 @@ export function updateAudioListener() {
     const sc  = state.sceneContainer;
     const sw  = state.app?.screen.width  || 0;
     const sh  = state.app?.screen.height || 0;
-    const camX =  -(sc.x - sw / 2) / sc.scale.x;
-    const camY = (sc.y - sh / 2) / sc.scale.y;
+    // Camera world pos in pixels → convert to units (same space as panner positions)
+    const camPxX =  -(sc.x - sw / 2) / sc.scale.x;
+    const camPxY =  (sc.y - sh / 2)  / sc.scale.y;
+    const camX   = camPxX / PIXELS_PER_UNIT;
+    const camY   = camPxY / PIXELS_PER_UNIT;
     const ctx  = _actx;
     if (ctx.listener.positionX) {
         ctx.listener.positionX.setValueAtTime(camX,  ctx.currentTime);
         ctx.listener.positionY.setValueAtTime(-camY, ctx.currentTime);
-        ctx.listener.positionZ.setValueAtTime(1,     ctx.currentTime);
+        ctx.listener.positionZ.setValueAtTime(0,     ctx.currentTime);
     } else {
-        ctx.listener.setPosition(camX, -camY, 1);
+        ctx.listener.setPosition(camX, -camY, 0);
     }
 }
 

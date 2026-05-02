@@ -59,6 +59,10 @@ export function stopPlayMode() {
     import('./engine.audio.js').then(m => m.stopPlayAudio());
     _blockEditorInput(false);    // restore input
     _showEditorUI();
+    // Restore audio source visuals (hidden during play mode)
+    for (const src of state.audioSources) {
+        if (src._container) src._container.visible = true;
+    }
     // Store snapshot ref now — _restoreScene will clear state._playSnapshot
     const snap = state._playSnapshot;
     state._playSnapshot = null;
@@ -88,24 +92,40 @@ export function drawCameraBounds() {
 
     const bounds = document.createElement('div');
     bounds.id = 'camera-bounds-overlay';
-    bounds.style.cssText = 'position:absolute;pointer-events:none;z-index:10;border:2px solid rgba(255,200,60,0.7);border-radius:1px;';
+    // Semi-transparent outside vignette via box-shadow, inner border shows exact frame
+    bounds.style.cssText = [
+        'position:absolute;pointer-events:none;z-index:10;',
+        'border:1.5px solid rgba(255,200,60,0.85);',
+        'border-radius:1px;',
+        'box-shadow:0 0 0 9999px rgba(0,0,0,0.28);',   // dims outside camera
+        'overflow:visible;',
+    ].join('');
     _positionCameraBounds(bounds);
     pixiEl.style.position = 'relative';
     pixiEl.appendChild(bounds);
 
+    // Label with preset info
     const lbl = document.createElement('div');
-    lbl.style.cssText = 'position:absolute;top:-18px;left:0;color:rgba(255,200,60,0.8);font-size:9px;font-family:monospace;pointer-events:none;white-space:nowrap;';
-    lbl.textContent = `CAMERA  ${gw} × ${gh}  [${presetLabel}]`;
+    lbl.style.cssText = [
+        'position:absolute;top:-20px;left:-1px;',
+        'color:rgba(255,200,60,0.9);font-size:9px;font-family:monospace;',
+        'white-space:nowrap;letter-spacing:0.5px;',
+        'background:rgba(0,0,0,0.55);padding:1px 5px 2px;border-radius:2px 2px 0 0;',
+    ].join('');
+    lbl.textContent = `▸ CAMERA  ${gw}×${gh}  [${presetLabel}]`;
     bounds.appendChild(lbl);
 
-    // Corner decorations
+    // Corner L-brackets
     ['tl','tr','bl','br'].forEach(corner => {
         const c = document.createElement('div');
         const isR = corner.includes('r'), isB = corner.includes('b');
-        c.style.cssText = `position:absolute;width:10px;height:10px;
-            ${isB?'bottom:-2px':'top:-2px'};${isR?'right:-2px':'left:-2px'};
-            border-${isB?'top':'bottom'}:2px solid rgba(255,200,60,1);
-            border-${isR?'left':'right'}:2px solid rgba(255,200,60,1);`;
+        c.style.cssText = [
+            `position:absolute;width:14px;height:14px;`,
+            `${isB ? 'bottom:-1px' : 'top:-1px'};`,
+            `${isR ? 'right:-1px'  : 'left:-1px'};`,
+            `border-${isB ? 'top' : 'bottom'}:2px solid rgba(255,200,60,1);`,
+            `border-${isR ? 'left' : 'right'}:2px solid rgba(255,200,60,1);`,
+        ].join('');
         bounds.appendChild(c);
     });
 }
@@ -284,6 +304,10 @@ function _hideAllGizmosAndGrid() {
         if (obj.isTilemap && obj._tilemapHelper) obj._tilemapHelper.visible = false;
         if (obj.isAutoTilemap && obj._autoTileHelper) obj._autoTileHelper.visible = false;
     });
+    // Hide audio source visuals in play mode (they are editor-only)
+    for (const src of state.audioSources) {
+        if (src._container) src._container.visible = false;
+    }
     if (state.gridGraphics) state.gridGraphics.visible = false;
     if (state.spriteBox)    state.spriteBox.visible    = false;
 }

@@ -234,8 +234,8 @@ function _makeLightSelectable(container) {
     container.on('pointerdown', (e) => {
         if (state.isPlaying) { e.stopPropagation(); return; }
         if (e.button !== 0) return;
+        e.stopPropagation();
         import('./engine.objects.js').then(m => m.selectObject(container));
-        // Do NOT stopPropagation here — let the gizmo handles fire if hit
     });
 }
 
