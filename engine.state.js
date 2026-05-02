@@ -105,6 +105,9 @@ export const state = {
         gameHeight:    720,
         /** 'landscape-desktop' | 'landscape-both' | 'portrait' | 'automatic' */
         cameraPreset:  'landscape-desktop',
+        /** World gravity — applied to all dynamic physics bodies */
+        gravityX:      0,
+        gravityY:      1,
     },
 
     // ── Audio Sources (positional, in-scene) ──────────────

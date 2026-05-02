@@ -220,10 +220,14 @@ export function initGizmoDrag() {
         h.transY.on('pointerdown',      e => onDragStart(e, 'tY', obj));
         h.transCenter.on('pointerdown', e => onDragStart(e, 'tC', obj));
         if (!isTilelike) {
-            h.scaleX.on('pointerdown',      e => onDragStart(e, 'sX', obj));
-            h.scaleY.on('pointerdown',      e => onDragStart(e, 'sY', obj));
-            h.scaleCenter.on('pointerdown', e => onDragStart(e, 'sC', obj));
-            h.rotRing.on('pointerdown',     e => onDragStart(e, 'r',  obj));
+            // Rotate ring is available for all non-tilemap objects (including lights)
+            h.rotRing.on('pointerdown', e => onDragStart(e, 'r', obj));
+            // Scale handles only for regular objects (not lights, not tilemaps)
+            if (!obj.isLight) {
+                h.scaleX.on('pointerdown',      e => onDragStart(e, 'sX', obj));
+                h.scaleY.on('pointerdown',      e => onDragStart(e, 'sY', obj));
+                h.scaleCenter.on('pointerdown', e => onDragStart(e, 'sC', obj));
+            }
         }
     };
 }

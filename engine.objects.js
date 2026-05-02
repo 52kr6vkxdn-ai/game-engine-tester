@@ -104,10 +104,16 @@ export function selectObject(obj) {
         state.spriteBox      = obj.spriteGraphic || null;
 
         if (obj._grpTranslate) {
-            if (obj.isLight || obj.isTilemap || obj.isAutoTilemap) {
-                // Lights and tilemaps: translate gizmo only
+            if (obj.isTilemap || obj.isAutoTilemap) {
+                // Tilemaps: translate only
                 obj._grpTranslate.visible = true;
                 obj._grpRotate.visible    = false;
+                obj._grpScale.visible     = false;
+            } else if (obj.isLight) {
+                // Lights: translate + rotate, never scale
+                const m = state.gizmoMode || 'translate';
+                obj._grpTranslate.visible = m === 'translate' || m === 'all';
+                obj._grpRotate.visible    = m === 'rotate'    || m === 'all';
                 obj._grpScale.visible     = false;
             } else {
                 const m = state.gizmoMode || 'translate';

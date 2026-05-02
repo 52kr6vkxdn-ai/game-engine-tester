@@ -296,6 +296,28 @@ export function refreshSceneSettingsPanel() {
       ${presetInfo[ss.cameraPreset] || ''}
     </div>
   </div>
+</div>
+<div class="component-block" style="border-left:3px solid #8a5a1a; margin:0;">
+  <div class="component-header" style="background:#1e1506;">
+    <svg viewBox="0 0 24 24" class="comp-icon" style="color:#d4902a;">
+      <line x1="12" y1="2" x2="12" y2="16"/><polyline points="8 12 12 16 16 12"/>
+      <circle cx="12" cy="20" r="2" fill="currentColor"/>
+    </svg>
+    <span style="color:#d4a850;font-weight:600;">Physics</span>
+  </div>
+  <div class="component-body" style="gap:8px;">
+    <div class="prop-row">
+      <span class="prop-label" title="World gravity X — horizontal pull">Gravity X</span>
+      <input type="number" id="scene-gravity-x" value="${ss.gravityX ?? 0}" step="0.1" min="-20" max="20"
+        style="width:70px;background:#1a1a24;border:1px solid #3a2a0a;color:#d8d8e8;border-radius:3px;padding:2px 4px;font-size:11px;">
+    </div>
+    <div class="prop-row">
+      <span class="prop-label" title="World gravity Y — vertical pull (1 = earth-like downward)">Gravity Y</span>
+      <input type="number" id="scene-gravity-y" value="${ss.gravityY ?? 1}" step="0.1" min="-20" max="20"
+        style="width:70px;background:#1a1a24;border:1px solid #3a2a0a;color:#d8d8e8;border-radius:3px;padding:2px 4px;font-size:11px;">
+      <span style="color:#555;font-size:9px;margin-left:4px;">applied at play</span>
+    </div>
+  </div>
 </div>`;
 
     // Bind events
@@ -337,6 +359,17 @@ export function refreshSceneSettingsPanel() {
         if (wEl) wEl.value = state.sceneSettings.gameWidth;
         if (hEl) hEl.value = state.sceneSettings.gameHeight;
         import('./engine.playmode.js').then(m => m.drawCameraBounds());
+    });
+
+    const gxEl = panel.querySelector('#scene-gravity-x');
+    const gyEl = panel.querySelector('#scene-gravity-y');
+    gxEl?.addEventListener('focus', () => import('./engine.history.js').then(m => m.pushUndo()));
+    gyEl?.addEventListener('focus', () => import('./engine.history.js').then(m => m.pushUndo()));
+    gxEl?.addEventListener('change', () => {
+        state.sceneSettings.gravityX = parseFloat(gxEl.value) ?? 0;
+    });
+    gyEl?.addEventListener('change', () => {
+        state.sceneSettings.gravityY = parseFloat(gyEl.value) ?? 1;
     });
 }
 
@@ -457,11 +490,12 @@ export function initInspectorListeners() {
         const hexStr = e.target.value.replace('#', '');
         const tintVal = parseInt(hexStr, 16);
         const sp = go.spriteGraphic;
+        // Update only this instance's tint live; propagation to prefab instances
+        // requires clicking "Apply to Prefab" so changes are intentional.
         if (sp && sp.tint !== undefined) {
             sp.tint = tintVal;
+            go.tint  = tintVal;   // store on object for snapshot/restore
         }
-        // Instant prefab propagation — color updates all instances live
-        _propagatePrefabField(go, 'tint', tintVal);
     });
 
     els.gizmoMode.addEventListener('change', (e) => setGizmoMode(e.target.value));
@@ -487,6 +521,13 @@ export function initInspectorListeners() {
             refreshHierarchy();
         });
     }
+
+    // Hierarchy search — live filter as user types
+    const searchInput = document.getElementById('hierarchy-search-input');
+    if (searchInput) {
+        searchInput.addEventListener('input', _applyHierarchySearch);
+        searchInput.addEventListener('keydown', e => e.stopPropagation()); // prevent gizmo shortcuts
+    }
 }
 
 // ── Gizmo Mode ────────────────────────────────────────────────
@@ -501,10 +542,15 @@ export function setGizmoMode(mode) {
             obj._grpTranslate.visible = false;
             obj._grpRotate.visible    = false;
             obj._grpScale.visible     = false;
-        } else if (obj.isLight || obj.isTilemap || obj.isAutoTilemap) {
-            // Lights and tilemaps: translate-only gizmo
+        } else if (obj.isTilemap || obj.isAutoTilemap) {
+            // Tilemaps: translate only
             obj._grpTranslate.visible = true;
             obj._grpRotate.visible    = false;
+            obj._grpScale.visible     = false;
+        } else if (obj.isLight) {
+            // Lights: translate + rotate, never scale
+            obj._grpTranslate.visible = mode === 'translate' || mode === 'all';
+            obj._grpRotate.visible    = mode === 'rotate'    || mode === 'all';
             obj._grpScale.visible     = false;
         } else {
             obj._grpTranslate.visible = mode === 'translate' || mode === 'all';
@@ -700,6 +746,21 @@ export function refreshHierarchy() {
         empty.style.cssText = 'color:#505060;font-size:11px;padding:16px;text-align:center;font-style:italic;';
         empty.textContent = 'Empty scene';
         list.appendChild(empty);
+    }
+
+    // Apply search filter
+    _applyHierarchySearch();
+}
+
+function _applyHierarchySearch() {
+    const searchEl = document.getElementById('hierarchy-search-input');
+    const query = (searchEl?.value || '').trim().toLowerCase();
+    const list  = document.getElementById('hierarchy-list');
+    if (!list) return;
+    for (const item of list.querySelectorAll('.tree-item')) {
+        const nameEl = item.querySelector('.tree-item-name');
+        const label  = (nameEl?.textContent || '').toLowerCase();
+        item.style.display = (!query || label.includes(query)) ? '' : 'none';
     }
 }
 

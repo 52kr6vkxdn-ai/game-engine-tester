@@ -228,7 +228,9 @@ export async function startPhysics() {
     catch (err) { console.error('[Physics]', err); return; }
 
     const { Engine, Bodies, Body, Composite } = window.Matter;
-    _engine = Engine.create({ gravity: { x: 0, y: 1 } });
+    const gx = state.sceneSettings?.gravityX ?? 0;
+    const gy = state.sceneSettings?.gravityY ?? 1;
+    _engine = Engine.create({ gravity: { x: gx, y: gy } });
     _bodies = [];
     const toAdd = [];
 
@@ -925,10 +927,15 @@ export function openPolygonEditor(obj, frameId = 'shared', opts = {}) {
     // Visible sprite size in container-local pixels (same units as everything else)
     const raw = rawSpriteSize(obj);
     const sprW = raw.w, sprH = raw.h;
-    const FIT_SCALE = Math.min(420 / sprW, 420 / sprH, 4);
+    // BORDER: extend canvas this many local-px around the sprite so points can be
+    // placed well outside the object's bounding box (e.g. large colliders).
+    const BORDER = Math.max(sprW, sprH, 80);
+    const totalW = sprW + 2 * BORDER;
+    const totalH = sprH + 2 * BORDER;
+    const FIT_SCALE = Math.min(420 / totalW, 420 / totalH, 4);
     let SCALE = FIT_SCALE;
-    let cvW   = Math.round(sprW * SCALE);
-    let cvH   = Math.round(sprH * SCALE);
+    let cvW   = Math.round(totalW * SCALE);
+    let cvH   = Math.round(totalH * SCALE);
 
     // Load existing polygon for this frame (or shared or default box)
     const existing = obj.physicsPolygons[frameId];
@@ -986,7 +993,7 @@ export function openPolygonEditor(obj, frameId = 'shared', opts = {}) {
           <div style="color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.05em;text-align:center;">
             Click canvas: add point  •  Drag point: move  •  Right-click point: delete  •  Ctrl+Wheel: zoom
           </div>
-          <div id="pe-canvas-wrap" style="overflow:auto;max-width:480px;max-height:480px;background:#04040a;border:1px solid #1a1a30;border-radius:4px;display:flex;align-items:flex-start;justify-content:flex-start;">
+          <div id="pe-canvas-wrap" style="overflow:auto;max-width:600px;max-height:560px;background:#04040a;border:1px solid #1a1a30;border-radius:4px;display:flex;align-items:flex-start;justify-content:flex-start;">
             <canvas id="pe-canvas" width="${cvW}" height="${cvH}"
               style="background:#080812;cursor:crosshair;display:block;flex-shrink:0;"
               oncontextmenu="return false;"></canvas>
@@ -1034,6 +1041,14 @@ export function openPolygonEditor(obj, frameId = 'shared', opts = {}) {
         spriteImg.src = previewURL;
     }
 
+    // Auto-scroll to center the sprite in the viewport after first render
+    requestAnimationFrame(() => {
+        const spriteCenterX = (BORDER + sprW / 2) * SCALE;
+        const spriteCenterY = (BORDER + sprH / 2) * SCALE;
+        wrap.scrollLeft = Math.max(0, spriteCenterX - wrap.clientWidth  / 2);
+        wrap.scrollTop  = Math.max(0, spriteCenterY - wrap.clientHeight / 2);
+    });
+
     let dragging = -1, hover = -1;
 
     // ── Zoom ─────────────────────────────────────────────────
@@ -1049,8 +1064,8 @@ export function openPolygonEditor(obj, frameId = 'shared', opts = {}) {
         const ay = anchorClient ? anchorClient.y - cvRect.top  : (wrap.clientHeight / 2 - (cvRect.top  - wrapRect.top ));
         const localX = ax / old, localY = ay / old; // sprite-space px under anchor
         SCALE = next;
-        cvW = Math.round(sprW * SCALE);
-        cvH = Math.round(sprH * SCALE);
+        cvW = Math.round(totalW * SCALE);
+        cvH = Math.round(totalH * SCALE);
         canvas.width  = cvW;
         canvas.height = cvH;
         // Scroll so that (localX*SCALE, localY*SCALE) lands back under the cursor
@@ -1061,8 +1076,9 @@ export function openPolygonEditor(obj, frameId = 'shared', opts = {}) {
     }
 
     // Coordinate helpers — origin at top-left of canvas, local origin at canvas centre
-    function toCanvas(p) { return { x: (p.x + sprW/2) * SCALE, y: (p.y + sprH/2) * SCALE }; }
-    function toLocal(cx, cy) { return { x: cx / SCALE - sprW/2, y: cy / SCALE - sprH/2 }; }
+    // BORDER shifts origin so (0,0) is at the centre of the canvas (not top-left).
+    function toCanvas(p) { return { x: (p.x + sprW/2 + BORDER) * SCALE, y: (p.y + sprH/2 + BORDER) * SCALE }; }
+    function toLocal(cx, cy) { return { x: cx / SCALE - sprW/2 - BORDER, y: cy / SCALE - sprH/2 - BORDER }; }
 
     function evPos(e) {
         const r  = canvas.getBoundingClientRect();
@@ -1088,23 +1104,35 @@ export function openPolygonEditor(obj, frameId = 'shared', opts = {}) {
         // Background
         ctx.fillStyle = '#080812'; ctx.fillRect(0, 0, cvW, cvH);
 
-        // Sprite preview
+        // Sprite preview — drawn only in the sprite region (not the whole canvas)
+        const sprLeft = BORDER * SCALE;
+        const sprTop  = BORDER * SCALE;
+        const sprPxW  = sprW * SCALE;
+        const sprPxH  = sprH * SCALE;
         if (showSprite && spriteImg?.complete && spriteImg.naturalWidth > 0) {
             ctx.globalAlpha = 0.4;
-            ctx.drawImage(spriteImg, 0, 0, cvW, cvH);
+            ctx.drawImage(spriteImg, sprLeft, sprTop, sprPxW, sprPxH);
             ctx.globalAlpha = 1;
         }
+        // Sprite bounds outline
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(sprLeft, sprTop, sprPxW, sprPxH);
+        ctx.setLineDash([]);
 
-        // Grid (in local-pixel units)
+        // Grid (in local-pixel units, spanning the full canvas)
         if (showGrid) {
             const step = Math.max(8, Math.round(Math.min(sprW, sprH) / 8)) * SCALE;
+            // Use true canvas centre (= sprite centre) as grid origin
+            const ox = cvW / 2, oy = cvH / 2;
             ctx.strokeStyle = 'rgba(255,255,255,0.04)'; ctx.lineWidth = 0.5;
-            for (let x = cvW/2 % step; x < cvW; x += step) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,cvH); ctx.stroke(); }
-            for (let y = cvH/2 % step; y < cvH; y += step) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cvW,y); ctx.stroke(); }
-            // Centre cross
-            ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.setLineDash([3,3]);
-            ctx.beginPath(); ctx.moveTo(cvW/2,0); ctx.lineTo(cvW/2,cvH); ctx.stroke();
-            ctx.beginPath(); ctx.moveTo(0,cvH/2); ctx.lineTo(cvW,cvH/2); ctx.stroke();
+            for (let x = ox % step; x < cvW; x += step) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,cvH); ctx.stroke(); }
+            for (let y = oy % step; y < cvH; y += step) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cvW,y); ctx.stroke(); }
+            // Centre cross (object origin)
+            ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.setLineDash([3,3]);
+            ctx.beginPath(); ctx.moveTo(ox, 0); ctx.lineTo(ox, cvH); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, oy); ctx.lineTo(cvW, oy); ctx.stroke();
             ctx.setLineDash([]);
         }
 

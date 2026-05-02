@@ -152,6 +152,40 @@ function initMenus() {
         });
     }
 
+    // ── Window menu ───────────────────────────────────────────
+    const windowBtn = document.getElementById('menu-window');
+    if (windowBtn) {
+        windowBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const hierarchy  = document.getElementById('panel-hierarchy');
+            const inspector  = document.getElementById('panel-inspector');
+            const bottom     = document.getElementById('panel-bottom');
+            const hVis = hierarchy?.style.display !== 'none';
+            const iVis = inspector?.style.display  !== 'none';
+            const bVis = bottom?.style.display     !== 'none';
+            toggleMenu(windowBtn, [
+                {
+                    label: (hVis ? '✓ ' : '    ') + 'Hierarchy',
+                    action: () => { if (hierarchy) hierarchy.style.display = hVis ? 'none' : ''; }
+                },
+                {
+                    label: (iVis ? '✓ ' : '    ') + 'Inspector',
+                    action: () => { if (inspector) inspector.style.display = iVis ? 'none' : ''; }
+                },
+                {
+                    label: (bVis ? '✓ ' : '    ') + 'Assets / Console',
+                    action: () => { if (bottom) bottom.style.display = bVis ? 'none' : ''; }
+                },
+                { separator: true },
+                { label: '⊞  Reset Layout', action: () => {
+                    if (hierarchy) hierarchy.style.display = '';
+                    if (inspector) inspector.style.display = '';
+                    if (bottom)    bottom.style.display    = '';
+                }},
+            ]);
+        });
+    }
+
     // Assets menu
     const assetsBtn = document.getElementById('menu-assets');
     if (assetsBtn) {

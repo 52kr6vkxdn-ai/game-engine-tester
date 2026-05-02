@@ -202,27 +202,36 @@ function _attachTranslateGizmo(container) {
     grpTranslate.addChild(transX, transY, transCenter);
     container._grpTranslate = grpTranslate;
 
-    // Lights only have translate (rotation handled via lightProps.direction/angle)
-    const grpRotate = new PIXI.Container(); grpRotate.visible = false;
-    const grpScale  = new PIXI.Container(); grpScale.visible  = false;
+    // Rotate ring — same style as sprite gizmo (yellow circle)
+    const rotRing = new PIXI.Graphics();
+    rotRing.lineStyle(3, 0xFACC15, 0.8);
+    rotRing.drawCircle(0, 0, 50);
+    rotRing.eventMode = 'static';
+    rotRing.cursor    = 'crosshair';
+    rotRing.hitArea   = new PIXI.Circle(0, 0, 60);
+    const grpRotate = new PIXI.Container();
+    grpRotate.addChild(rotRing);
     container._grpRotate = grpRotate;
-    container._grpScale  = grpScale;
+
+    // Lights have no scale gizmo
+    const grpScale = new PIXI.Container(); grpScale.visible = false;
+    container._grpScale = grpScale;
 
     gizmoContainer.addChild(grpTranslate, grpRotate, grpScale);
     container._gizmoHandles = {
         transX, transY, transCenter,
+        rotRing,
         scaleX: transX, scaleY: transY, scaleCenter: transCenter,
-        rotRing: transCenter,
     };
 
-    // Stop propagation on each handle so the container's broad pointerdown
-    // doesn't fire simultaneously with a gizmo drag start.
-    [transX, transY, transCenter].forEach(h => {
+    // Stop propagation so gizmo handles don't bubble to stage deselect
+    [transX, transY, transCenter, rotRing].forEach(h => {
         h.on('pointerdown', e => e.stopPropagation());
     });
 
     container.cursor = 'pointer';
-    grpTranslate.visible = true; // lights always show translate
+    grpTranslate.visible = true;
+    // grpRotate visibility set by selectObject / setGizmoMode
 }
 
 function _makeLightSelectable(container) {
