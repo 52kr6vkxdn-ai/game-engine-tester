@@ -20,6 +20,7 @@ export function saveProject() {
         assets:      state.assets,
         tilesetBrushes: state.tilesetBrushes,
         prefabs:     state.prefabs,
+        scripts:     state.scripts,
         scenes:      state.scenes,
         activeScene: state.activeSceneIndex,
     };
@@ -74,6 +75,7 @@ export function newProject() {
     state.assets         = [];
     state.tilesetBrushes = [];
     state.prefabs        = [];
+    state.scripts        = [];
     state.scenes         = [{ id: 'scene_1', name: 'Scene-1', snapshot: null }];
     state.activeSceneIndex = 0;
     // Clear audio sources
@@ -89,6 +91,7 @@ export function newProject() {
         m.refreshAssetPanel();
         m.refreshPrefabPanel();
     });
+    import('./engine.scripting.js').then(m => m.refreshScriptPanel());
     import('./engine.scenes.js').then(m => m.initScenes());
     _logConsole('🆕 New project created', '#9bc');
 }
@@ -116,6 +119,7 @@ function _applyProject(project) {
     state.assets         = project.assets  || [];
     state.tilesetBrushes = project.tilesetBrushes || [];
     state.prefabs        = project.prefabs || [];
+    state.scripts        = project.scripts || [];
     state.scenes   = project.scenes  || [{ id: 'scene_1', name: 'Scene-1', snapshot: null }];
     state.activeSceneIndex = project.activeScene ?? 0;
 
@@ -130,6 +134,7 @@ function _applyProject(project) {
         m.refreshAssetPanel();
         m.refreshPrefabPanel();
     });
+    import('./engine.scripting.js').then(m => m.refreshScriptPanel());
 
     _logConsole('📂 Project loaded: ' + (project.name || 'unknown'), '#4ade80');
 }

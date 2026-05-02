@@ -117,4 +117,10 @@ export const state = {
      *   _container:PIXI.Container|null}>}
      */
     audioSources: [],
+
+    // ── Scripts (stored in project alongside assets) ──────────
+    /**
+     * @type {Array<{id:string, name:string, code:string, updatedAt:number}>}
+     */
+    scripts: [],
 };

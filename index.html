@@ -194,6 +194,10 @@
                         <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
                         Audio
                     </div>
+                    <div class="folder-item" id="folder-scripts">
+                        <svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                        Scripts
+                    </div>
                 </div>
                 <div class="assets-main">
                     <div class="assets-toolbar">
@@ -203,6 +207,7 @@
                         </button>
                     </div>
                     <div id="asset-grid" class="asset-grid"></div>
+                    <div id="script-asset-grid" class="asset-grid" style="display:none;"></div>
                 </div>
             </div>
 
@@ -395,11 +400,22 @@ window.onload = () => {
         { el: 'folder-all',     filter: 'all' },
         { el: 'folder-sprites', filter: 'sprite' },
         { el: 'folder-audio',   filter: 'audio' },
+        { el: 'folder-scripts', filter: 'scripts' },
     ];
     folders.forEach(f => {
         document.getElementById(f.el)?.addEventListener('click', () => {
             folders.forEach(o => document.getElementById(o.el)?.classList.toggle('folder-item--active', o.el === f.el));
-            import('./engine.ui.js').then(m => m.setAssetFilter(f.filter));
+            const assetGrid  = document.getElementById('asset-grid');
+            const scriptGrid = document.getElementById('script-asset-grid');
+            if (f.filter === 'scripts') {
+                if (assetGrid)  assetGrid.style.display  = 'none';
+                if (scriptGrid) scriptGrid.style.display = '';
+                import('./engine.scripting.js').then(m => m.refreshScriptPanel());
+            } else {
+                if (assetGrid)  assetGrid.style.display  = '';
+                if (scriptGrid) scriptGrid.style.display = 'none';
+                import('./engine.ui.js').then(m => m.setAssetFilter(f.filter));
+            }
         });
     });
 
