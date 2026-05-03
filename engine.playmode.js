@@ -443,7 +443,9 @@ function _snapshotScene() {
                 visible: obj.visible !== false,
                 alpha:   obj.alpha   ?? 1,
                 // ── Script ─────────────────────────────────────────
-                scriptName: obj.scriptName ?? null,
+                scriptName:  obj.scriptName  ?? null,
+                scriptTag:   obj._scriptTag  ?? null,
+                scriptGroup: obj._scriptGroup ?? null,
             };
         }),
         camX: state.sceneContainer?.x ?? 0, camY: state.sceneContainer?.y ?? 0,
@@ -512,7 +514,9 @@ function _restoreScene(snap) {
                 obj.visible = s.visible !== false;
                 obj.alpha   = s.alpha   ?? 1;
                 // ── Script ─────────────────────────────────────────
-                obj.scriptName = s.scriptName ?? null;
+                obj.scriptName  = s.scriptName  ?? null;
+                obj._scriptTag  = s.scriptTag   ?? null;
+                obj._scriptGroup= s.scriptGroup ?? null;
                 if (state._bindGizmoHandles) state._bindGizmoHandles(obj);
                 return obj;
             }

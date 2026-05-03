@@ -197,7 +197,9 @@ function _saveActiveScene() {
                 visible: obj.visible !== false,
                 alpha:   obj.alpha   ?? 1,
                 // ── Script ─────────────────────────────────────────
-                scriptName: obj.scriptName ?? null,
+                scriptName:  obj.scriptName  ?? null,
+                scriptTag:   obj._scriptTag  ?? null,
+                scriptGroup: obj._scriptGroup ?? null,
             };
         }),
         camX:         state.sceneContainer?.x       ?? 0,
