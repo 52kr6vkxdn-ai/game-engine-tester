@@ -212,8 +212,17 @@
             </div>
 
             <!-- Console -->
-            <div id="tab-console" class="tab-panel" style="display:none;">
-                <div id="console-output" style="font-family:monospace;font-size:11px;padding:8px;overflow-y:auto;height:100%;color:#888;background:#141414;">
+            <div id="tab-console" class="tab-panel" style="display:none;flex-direction:column;">
+                <div id="console-toolbar" style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:#0f0f0f;border-bottom:1px solid #1e1e1e;flex-shrink:0;">
+                    <span style="color:#555;font-size:10px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;">Console</span>
+                    <div style="flex:1;"></div>
+                    <button id="btn-console-clear" title="Clear console" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:10px;padding:2px 6px;border-radius:3px;" onmouseenter="this.style.color='#aaa'" onmouseleave="this.style.color='#555'">🗑 Clear</button>
+                    <button id="btn-console-float" title="Pop out console" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:10px;padding:2px 6px;border-radius:3px;" onmouseenter="this.style.color='#aaa'" onmouseleave="this.style.color='#555'">⧉ Float</button>
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:#555;font-size:10px;" title="Auto-scroll to bottom">
+                        <input type="checkbox" id="console-autoscroll" checked style="accent-color:#4ade80;cursor:pointer;"> Auto-scroll
+                    </label>
+                </div>
+                <div id="console-output" style="font-family:'Fira Code','Cascadia Code',monospace;font-size:11px;padding:6px 8px;overflow-y:auto;flex:1;color:#888;background:#0c0c0c;line-height:1.6;">
                     <div style="color:#4ade80;">▶ Zengine ready</div>
                 </div>
             </div>
@@ -372,15 +381,17 @@
 
 <script type="module">
 import { startEngine } from './engine.core.js';
+import { installGlobalErrorCatchers } from './engine.console.js';
 
 window.onload = () => {
     startEngine();
+    installGlobalErrorCatchers();
 
     // Tab switching
     const tabs = [
         { btn: 'tab-assets-btn',  panel: 'tab-assets',   display: 'flex' },
         { btn: 'tab-prefabs-btn', panel: 'tab-prefabs',  display: 'flex' },
-        { btn: 'tab-console-btn', panel: 'tab-console',  display: 'block' },
+        { btn: 'tab-console-btn', panel: 'tab-console',  display: 'flex' },
     ];
     tabs.forEach(t => {
         document.getElementById(t.btn)?.addEventListener('click', () => {
@@ -393,6 +404,16 @@ window.onload = () => {
                 import('./engine.ui.js').then(m => m.refreshPrefabPanel());
             }
         });
+    });
+
+    // ── Console controls ────────────────────────────────────────
+    document.getElementById('btn-console-clear')?.addEventListener('click', () => {
+        const out = document.getElementById('console-output');
+        if (out) out.innerHTML = '<div style="color:#555;font-style:italic;font-size:10px;">Console cleared</div>';
+    });
+
+    document.getElementById('btn-console-float')?.addEventListener('click', () => {
+        import('./engine.console.js').then(m => m.openFloatingConsole());
     });
 
     // Asset folder filters

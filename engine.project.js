@@ -77,6 +77,11 @@ export function newProject() {
     state.prefabs        = [];
     state.scripts        = [];
     state.scenes         = [{ id: 'scene_1', name: 'Scene-1', snapshot: null }];
+    // Inject the built-in example scripts
+    import('./engine.defaultscripts.js').then(m => {
+        m.injectDefaultScripts(state.scripts);
+        import('./engine.scripting.js').then(s => s.refreshScriptPanel());
+    });
     state.activeSceneIndex = 0;
     // Clear audio sources
     import('./engine.audio.js').then(m => m.clearAudioSources());
@@ -120,6 +125,10 @@ function _applyProject(project) {
     state.tilesetBrushes = project.tilesetBrushes || [];
     state.prefabs        = project.prefabs || [];
     state.scripts        = project.scripts || [];
+    // Inject built-in scripts if the project has none yet
+    if (state.scripts.length === 0) {
+        import('./engine.defaultscripts.js').then(m => m.injectDefaultScripts(state.scripts));
+    }
     state.scenes   = project.scenes  || [{ id: 'scene_1', name: 'Scene-1', snapshot: null }];
     state.activeSceneIndex = project.activeScene ?? 0;
 

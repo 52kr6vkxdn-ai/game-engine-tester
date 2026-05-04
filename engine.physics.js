@@ -38,6 +38,29 @@ const MATTER_CDN = 'https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.m
 let _engine = null;
 let _rafId  = null;
 let _bodies = [];  // { obj, body, type }[]
+const _pendingCollisions = []; // collected each frame, fired after step
+
+// ── Fire collision events to the scripting system ─────────────
+function _fireCollisionEvents() {
+    if (_pendingCollisions.length === 0) return;
+    import('./engine.scripting.js').then(m => {
+        for (const pair of _pendingCollisions) {
+            // Find which of our tracked objects these bodies belong to
+            const entA = _bodies.find(e => e.body === pair.bodyA || _bodyContains(pair.bodyA, e.body));
+            const entB = _bodies.find(e => e.body === pair.bodyB || _bodyContains(pair.bodyB, e.body));
+            if (entA && entB) {
+                m.triggerCollision(entA.obj, entB.obj);
+            }
+        }
+        _pendingCollisions.length = 0;
+    });
+}
+
+function _bodyContains(part, compound) {
+    // For compound bodies (capsule etc.) check if part is one of the compound's parts
+    if (!compound?.parts) return false;
+    return compound.parts.includes(part);
+}
 
 // ─────────────────────────────────────────────────────────────
 // CDN loader
@@ -353,6 +376,11 @@ export async function startPhysics() {
 
     Composite.add(_engine.world, toAdd);
 
+    // ── Collision event wiring for script callbacks ───────────
+    window.Matter.Events.on(_engine, 'collisionStart', (event) => {
+        _pendingCollisions.push(...event.pairs);
+    });
+
     const _worldGravity = _engine.gravity;
     let last = null;
     function tick(now) {
@@ -360,44 +388,74 @@ export async function startPhysics() {
         if (state.isPaused) return;
         const dt = last ? Math.min(now - last, 50) : 16.67;
         last = now;
+        const dtSec = dt / 1000;
 
-        // Apply per-body gravity scale before each engine step
         const { Body: B } = window.Matter;
+
+        // ── PRE-STEP: kinematic bodies move via velocity (not teleport)
+        // This is the critical fix: Matter.js only resolves collisions when
+        // bodies have velocity. Calling setPosition() alone bypasses the
+        // collision detection entirely, causing pass-through on tilemaps
+        // and dynamic objects.
+        for (const { obj, body, type } of _bodies) {
+            if (type !== 'kinematic') continue;
+
+            const off  = body._zenOffset || { x: 0, y: 0 };
+            const cosR = Math.cos(obj.rotation || 0);
+            const sinR = Math.sin(obj.rotation || 0);
+            const targetX = obj.x + off.x * cosR - off.y * sinR;
+            const targetY = obj.y + off.x * sinR + off.y * cosR;
+
+            // Drive velocity to reach the target this frame.
+            // Matter's collision resolution then pushes back if something is in the way.
+            if (dtSec > 0) {
+                B.setVelocity(body, {
+                    x: (targetX - body.position.x) / dtSec,
+                    y: (targetY - body.position.y) / dtSec,
+                });
+            }
+            B.setAngle(body, obj.rotation || 0);
+            B.setAngularVelocity(body, 0);
+        }
+
+        // ── PRE-STEP: dynamic gravity scale ──────────────────────
         for (const { obj, body, type } of _bodies) {
             if (type === 'static' || type === 'kinematic') continue;
-            // Y gravity: scale relative to world gravity (1.0 = normal, 0 = weightless, 2 = double)
-            const scaleY = (obj.physicsGravityScale  ?? 1) - 1; // delta above the base world gravity
-            // X gravity: per-object horizontal gravity multiplier (1 = none extra, 2 = double world X, etc.)
-            const scaleX = (obj.physicsGravityXScale ?? 1) - 1; // delta above base world X gravity
-            const forceX = _worldGravity.x * _worldGravity.scale * scaleX * body.mass;
-            const forceY = _worldGravity.y * _worldGravity.scale * scaleY * body.mass;
+            const scaleY = (obj.physicsGravityScale  ?? 1) - 1;
+            const scaleX = (obj.physicsGravityXScale ?? 1) - 1;
+            const gs     = _worldGravity.scale ?? 0.001;
+            const forceX = _worldGravity.x * gs * scaleX * body.mass;
+            const forceY = _worldGravity.y * gs * scaleY * body.mass;
             if (forceX !== 0 || forceY !== 0) {
                 B.applyForce(body, body.position, { x: forceX, y: forceY });
             }
         }
 
         Engine.update(_engine, dt);
+
+        // ── POST-STEP: sync Matter body positions back to sprites ──
         for (const { obj, body, type } of _bodies) {
             if (type === 'static') continue;
-            const off = body._zenOffset || { x: 0, y: 0 };
+            const off  = body._zenOffset || { x: 0, y: 0 };
+            const cosR = Math.cos(body.angle);
+            const sinR = Math.sin(body.angle);
+
             if (type === 'kinematic') {
-                // Sprite drives body — re-apply offset
-                const cosR = Math.cos(obj.rotation || 0);
-                const sinR = Math.sin(obj.rotation || 0);
-                window.Matter.Body.setPosition(body, {
-                    x: obj.x + off.x * cosR - off.y * sinR,
-                    y: obj.y + off.x * sinR + off.y * cosR,
-                });
-                window.Matter.Body.setAngle(body, obj.rotation || 0);
+                // After the physics step the body may have been pushed back by
+                // a collider — read the resolved position back onto the sprite.
+                obj.x = body.position.x - (off.x * cosR - off.y * sinR);
+                obj.y = body.position.y - (off.x * sinR + off.y * cosR);
+                // Don't override rotation for kinematic — script owns it.
             } else {
-                // Body drives sprite — back out the rotated offset
-                const cosR = Math.cos(body.angle);
-                const sinR = Math.sin(body.angle);
+                // Dynamic: body fully drives sprite
                 obj.x = body.position.x - (off.x * cosR - off.y * sinR);
                 obj.y = body.position.y - (off.x * sinR + off.y * cosR);
                 obj.rotation = body.angle;
             }
         }
+
+        // ── Fire collected collision events to scripts ────────────
+        _fireCollisionEvents();
     }
     _rafId = requestAnimationFrame(tick);
 }
@@ -415,10 +473,13 @@ export function stopPhysics() {
         if (obj) delete obj._runtimePhysicsFrameId;
     }
     if (_engine && window.Matter) {
+        window.Matter.Events.off(_engine);
         window.Matter.Composite.clear(_engine.world, false);
         window.Matter.Engine.clear(_engine);
     }
-    _engine = null; _bodies = [];
+    _engine = null;
+    _bodies = [];
+    _pendingCollisions.length = 0;
 }
 
 // Rebuild a body when the visible animation frame changes, preserving the
@@ -488,32 +549,40 @@ export function buildPhysicsInspectorHTML(obj) {
     const rest   = obj.physicsRestitution     ?? 0.1;
     const dens   = obj.physicsDensity         ?? 0.001;
     const grav   = obj.physicsGravityScale    ?? 1;
-    const gravX  = obj.physicsGravityXScale   ?? 1;
     const ldamp  = obj.physicsLinearDamping   ?? 0;
     const adamp  = obj.physicsAngularDamping  ?? 0;
     const fixRot = !!obj.physicsFixedRotation;
     const sensor = !!obj.physicsIsSensor;
     const shape  = obj.physicsShape           ?? 'box';
 
+    const isDynamic   = type === 'dynamic';
+    const isKinematic = type === 'kinematic';
+    const isStatic    = type === 'static';
+    const hasPhysics  = type !== 'none';
+
     const OPT  = (v, l) => `<option value="${v}" ${type  === v ? 'selected' : ''}>${l}</option>`;
     const SOPT = (v, l) => `<option value="${v}" ${shape === v ? 'selected' : ''}>${l}</option>`;
 
-    // Effective collision size in raw pixels (honours user overrides, defaults to sprite raw size)
-    const geom = collisionGeom(obj);
-    const psW  = +geom.w.toFixed(1);
-    const psH  = +geom.h.toFixed(1);
-    const psR  = +geom.r.toFixed(1);
-    // Capsule: use physicsSize.capW/capH if overridden, else derive from sprite
+    const geom   = collisionGeom(obj);
+    const psW    = +geom.w.toFixed(1);
+    const psH    = +geom.h.toFixed(1);
+    const psR    = +geom.r.toFixed(1);
     const psCapW = +(obj.physicsSize?.capW ?? geom.w).toFixed(1);
     const psCapH = +(obj.physicsSize?.capH ?? geom.h).toFixed(1);
-    // Whether the user has overridden the size (used to highlight the "reset" button)
     const hasOverride = !!(obj.physicsSize && (obj.physicsSize.w || obj.physicsSize.h || obj.physicsSize.r));
 
-    // Frame list for the per-frame polygon tabs
+    // ── Body type descriptions ────────────────────────────────
+    const typeDescs = {
+        none:      '',
+        static:    'Does not move. Collides with everything. Great for walls, floors, platforms.',
+        dynamic:   'Fully physics-driven. Gravity, forces, and impulses all apply.',
+        kinematic: 'Script-controlled movement. Pushes dynamic bodies. Collides with tilemaps.',
+    };
+
+    // ── Per-frame polygon tabs ────────────────────────────────
     const anims  = obj.animations || [];
     const frames = anims.flatMap(a => (a.frames || []).map(f => ({ id: f.id, name: f.name || f.id })));
     const polyMap = obj.physicsPolygons || {};
-
     const frameTabsHTML = frames.length > 0
         ? `<div style="margin-top:4px;">
             <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;">Per-frame shapes</div>
@@ -533,6 +602,150 @@ export function buildPhysicsInspectorHTML(obj) {
 
     const sharedSummary = _polySummary(polyMap.shared);
 
+    // ── Shape size editors (shared HTML, shown/hidden by shape select) ──
+    const sizeEditorsHTML = `
+        <!-- Box size -->
+        <div id="phys-box-row" style="display:${shape==='box'?'flex':'none'};flex-direction:column;gap:4px;background:#0a0a18;border:1px solid #1a1a30;border-radius:3px;padding:6px 8px;">
+          <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Box size (px)</div>
+          <div class="prop-row">
+            <span class="prop-label">Width</span>
+            <input id="phys-box-w" type="number" min="1" step="1" value="${psW}" style="width:80px;${_inp()}">
+          </div>
+          <div class="prop-row">
+            <span class="prop-label">Height</span>
+            <input id="phys-box-h" type="number" min="1" step="1" value="${psH}" style="width:80px;${_inp()}">
+          </div>
+          <button id="phys-size-reset-box" style="${_btn(hasOverride?'#06b6d4':'#444')}width:100%;font-size:10px;">↻ Auto-fit to sprite</button>
+        </div>
+        <!-- Circle size -->
+        <div id="phys-circle-row" style="display:${shape==='circle'?'flex':'none'};flex-direction:column;gap:4px;background:#0a0a18;border:1px solid #1a1a30;border-radius:3px;padding:6px 8px;">
+          <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Radius (px)</div>
+          <div class="prop-row">
+            <span class="prop-label">Radius</span>
+            <input id="phys-circle-r" type="number" min="1" step="1" value="${psR}" style="width:80px;${_inp()}">
+          </div>
+          <button id="phys-size-reset-circle" style="${_btn(hasOverride?'#06b6d4':'#444')}width:100%;font-size:10px;">↻ Auto-fit to sprite</button>
+        </div>
+        <!-- Capsule size -->
+        <div id="phys-capsule-row" style="display:${shape==='capsule'?'flex':'none'};flex-direction:column;gap:4px;background:#0a0a18;border:1px solid #1a1a30;border-radius:3px;padding:6px 8px;">
+          <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Capsule size (px)</div>
+          <div class="prop-row">
+            <span class="prop-label">Width</span>
+            <input id="phys-cap-w" type="number" min="1" step="1" value="${psCapW}" style="width:80px;${_inp()}">
+          </div>
+          <div class="prop-row">
+            <span class="prop-label">Height</span>
+            <input id="phys-cap-h" type="number" min="1" step="1" value="${psCapH}" style="width:80px;${_inp()}">
+          </div>
+          <div style="color:#555;font-size:9px;">Pill shape — round ends on the short axis</div>
+          <button id="phys-size-reset-capsule" style="${_btn(hasOverride?'#06b6d4':'#444')}width:100%;font-size:10px;">↻ Auto-fit to sprite</button>
+        </div>
+        <!-- Polygon editor -->
+        <div id="phys-polygon-row" style="display:${shape==='polygon'?'flex':'none'};flex-direction:column;gap:4px;">
+          <button id="phys-edit-polygon" style="${_btn('#7c3aed')}width:100%;">✏ Edit Collision Shape</button>
+          <button id="phys-autofit" style="${_btn('#06b6d4')}width:100%;margin-top:2px;">🎯 Auto-fit from Sprite</button>
+          <div style="color:#666;font-size:9px;text-align:center;">${sharedSummary}</div>
+          ${frameTabsHTML}
+        </div>
+    `;
+
+    // ── Build sections based on body type ─────────────────────
+    // Static: shape + material (friction/bounce) only. No mass, gravity, damping.
+    // Kinematic: shape + material + constraints. No gravity scale (not affected by gravity).
+    // Dynamic: everything.
+
+    const materialHTML = `
+        <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
+        <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Material</div>
+        <div class="prop-row">
+          <span class="prop-label">Friction</span>
+          <input id="phys-friction" type="number" value="${fric}" min="0" max="1" step="0.05" style="width:60px;${_inp()}">
+          <span style="color:#555;font-size:9px;">0=ice, 1=sticky</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Bounce</span>
+          <input id="phys-bounce" type="number" value="${rest}" min="0" max="1" step="0.05" style="width:60px;${_inp()}">
+          <span style="color:#555;font-size:9px;">0=none, 1=full</span>
+        </div>
+    `;
+
+    const massHTML = isDynamic ? `
+        <div class="prop-row">
+          <span class="prop-label">Density</span>
+          <input id="phys-density" type="number" value="${dens}" min="0.0001" max="100" step="0.0005" style="width:60px;${_inp()}">
+          <span style="color:#555;font-size:9px;">affects mass</span>
+        </div>
+    ` : '';
+
+    const dampingHTML = isDynamic ? `
+        <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
+        <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Damping</div>
+        <div class="prop-row">
+          <span class="prop-label">Linear</span>
+          <input id="phys-linear-damp" type="number" value="${ldamp}" min="0" max="100" step="0.05" style="width:60px;${_inp()}">
+          <span style="color:#555;font-size:9px;">air drag</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Angular</span>
+          <input id="phys-angular-damp" type="number" value="${adamp}" min="0" max="100" step="0.05" style="width:60px;${_inp()}">
+          <span style="color:#555;font-size:9px;">spin drag</span>
+        </div>
+    ` : '';
+
+    const gravityHTML = isDynamic ? `
+        <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
+        <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Gravity</div>
+        <div class="prop-row">
+          <span class="prop-label">Scale</span>
+          <input id="phys-gravity-scale" type="number" value="${grav}" min="-10" max="10" step="0.1" style="width:60px;${_inp()}">
+          <span style="color:#555;font-size:9px;">1=normal, 0=float, −1=invert</span>
+        </div>
+    ` : '';
+
+    const constraintsHTML = (isDynamic || isKinematic) ? `
+        <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
+        <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Constraints</div>
+        ${isDynamic ? `
+        <div class="prop-row">
+          <span class="prop-label" title="Prevent this body from rotating due to physics">Fix rotation</span>
+          <input id="phys-fixed-rot" type="checkbox" ${fixRot ? 'checked' : ''} style="width:14px;height:14px;accent-color:#facc15;cursor:pointer;">
+          <span style="color:#555;font-size:9px;">no spin</span>
+        </div>` : ''}
+        <div class="prop-row">
+          <span class="prop-label" title="Detects overlaps but causes no physics response">Is Sensor</span>
+          <input id="phys-sensor" type="checkbox" ${sensor ? 'checked' : ''} style="width:14px;height:14px;accent-color:#facc15;cursor:pointer;">
+          <span style="color:#555;font-size:9px;">detect only</span>
+        </div>
+    ` : (isStatic ? `
+        <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
+        <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Constraints</div>
+        <div class="prop-row">
+          <span class="prop-label">Is Sensor</span>
+          <input id="phys-sensor" type="checkbox" ${sensor ? 'checked' : ''} style="width:14px;height:14px;accent-color:#facc15;cursor:pointer;">
+          <span style="color:#555;font-size:9px;">detect only</span>
+        </div>
+    ` : '');
+
+    const kinematicNote = isKinematic ? `
+        <div style="background:#0d1f33;border:1px solid #1e4a7a44;border-radius:3px;padding:5px 8px;font-size:9px;color:#7cb9f088;margin-top:2px;">
+            💡 Kinematic bodies are moved by your script.<br>
+            They push dynamic bodies and collide with tilemaps.<br>
+            Use <code style="color:#7cb9f0;">translate()</code> or <code style="color:#7cb9f0;">moveTo()</code> in your script.
+        </div>` : '';
+
+    const layersHTML = hasPhysics ? `
+        <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
+        <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Collision Layers</div>
+        <div class="prop-row">
+          <span class="prop-label" title="Bitmask: which layer this body belongs to">Category</span>
+          <input id="phys-col-cat" type="number" value="${obj.physicsCollisionCategory ?? 1}" min="1" max="2147483647" step="1" style="width:80px;${_inp()}">
+        </div>
+        <div class="prop-row">
+          <span class="prop-label" title="Bitmask: which layers to collide with (−1 = all)">Mask</span>
+          <input id="phys-col-mask" type="number" value="${obj.physicsCollisionMask ?? -1}" min="-2147483648" max="2147483647" step="1" style="width:80px;${_inp()}">
+        </div>
+    ` : '';
+
     return `
     <div class="component-block" id="inspector-physics-section">
       <div class="component-header">
@@ -544,131 +757,46 @@ export function buildPhysicsInspectorHTML(obj) {
       </div>
       <div class="component-body" style="display:flex;flex-direction:column;gap:6px;">
 
+        <!-- Body type selector -->
         <div class="prop-row">
           <span class="prop-label">Body type</span>
           <select id="phys-type" style="${_sel()}">
-            ${OPT('none','None')} ${OPT('static','Static')}
-            ${OPT('dynamic','Dynamic')} ${OPT('kinematic','Kinematic')}
+            ${OPT('none','❌ None')}
+            ${OPT('static','🧱 Static')}
+            ${OPT('dynamic','🔵 Dynamic')}
+            ${OPT('kinematic','🎮 Kinematic')}
           </select>
         </div>
 
-        <div id="phys-extra" style="display:${type==='none'?'none':'flex'};flex-direction:column;gap:5px;">
+        ${hasPhysics && typeDescs[type] ? `
+        <div style="background:#0a0f18;border:1px solid #1a2a1a;border-radius:3px;padding:5px 8px;font-size:9px;color:#4a6a4a;line-height:1.5;">
+            ${typeDescs[type]}
+        </div>` : ''}
 
+        <div id="phys-extra" style="display:${hasPhysics?'flex':'none'};flex-direction:column;gap:5px;">
+
+          <!-- Collision shape -->
           <div class="prop-row">
-            <span class="prop-label">Collision</span>
+            <span class="prop-label">Shape</span>
             <select id="phys-shape" style="${_sel()}">
-              ${SOPT('box','▭ Box')} ${SOPT('circle','◯ Circle')} ${SOPT('capsule','⬩ Capsule')} ${SOPT('polygon','⬡ Polygon')}
+              ${SOPT('box','▭ Box')}
+              ${SOPT('circle','◯ Circle')}
+              ${SOPT('capsule','⬩ Capsule')}
+              ${SOPT('polygon','⬡ Polygon')}
             </select>
           </div>
 
-          <!-- Box size editor -->
-          <div id="phys-box-row" style="display:${shape==='box'?'flex':'none'};flex-direction:column;gap:4px;background:#0a0a18;border:1px solid #1a1a30;border-radius:3px;padding:6px 8px;">
-            <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Box size (px)</div>
-            <div class="prop-row">
-              <span class="prop-label">Width</span>
-              <input id="phys-box-w" type="number" min="1" step="1" value="${psW}" style="width:80px;${_inp()}">
-            </div>
-            <div class="prop-row">
-              <span class="prop-label">Height</span>
-              <input id="phys-box-h" type="number" min="1" step="1" value="${psH}" style="width:80px;${_inp()}">
-            </div>
-            <button id="phys-size-reset-box" style="${_btn(hasOverride?'#06b6d4':'#444')}width:100%;font-size:10px;">↻ Auto-fit to visible pixels</button>
-          </div>
+          ${sizeEditorsHTML}
+          ${materialHTML}
+          ${massHTML}
+          ${gravityHTML}
+          ${dampingHTML}
+          ${constraintsHTML}
+          ${kinematicNote}
+          ${layersHTML}
 
-          <!-- Circle size editor -->
-          <div id="phys-circle-row" style="display:${shape==='circle'?'flex':'none'};flex-direction:column;gap:4px;background:#0a0a18;border:1px solid #1a1a30;border-radius:3px;padding:6px 8px;">
-            <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Circle radius (px)</div>
-            <div class="prop-row">
-              <span class="prop-label">Radius</span>
-              <input id="phys-circle-r" type="number" min="1" step="1" value="${psR}" style="width:80px;${_inp()}">
-            </div>
-            <button id="phys-size-reset-circle" style="${_btn(hasOverride?'#06b6d4':'#444')}width:100%;font-size:10px;">↻ Auto-fit to visible pixels</button>
-          </div>
-
-          <!-- Capsule size editor -->
-          <div id="phys-capsule-row" style="display:${shape==='capsule'?'flex':'none'};flex-direction:column;gap:4px;background:#0a0a18;border:1px solid #1a1a30;border-radius:3px;padding:6px 8px;">
-            <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Capsule size (px)</div>
-            <div class="prop-row">
-              <span class="prop-label">Width</span>
-              <input id="phys-cap-w" type="number" min="1" step="1" value="${psCapW}" style="width:80px;${_inp()}">
-            </div>
-            <div class="prop-row">
-              <span class="prop-label">Height</span>
-              <input id="phys-cap-h" type="number" min="1" step="1" value="${psCapH}" style="width:80px;${_inp()}">
-            </div>
-            <div style="color:#555;font-size:9px;">Pill shape — round ends on the short axis</div>
-            <button id="phys-size-reset-capsule" style="${_btn(hasOverride?'#06b6d4':'#444')}width:100%;font-size:10px;">↻ Auto-fit to visible pixels</button>
-          </div>
-
-          <div id="phys-polygon-row" style="display:${shape==='polygon'?'flex':'none'};flex-direction:column;gap:4px;">
-            <button id="phys-edit-polygon" style="${_btn('#7c3aed')}width:100%;">
-              ✏ Edit Collision Shape
-            </button>
-            <button id="phys-autofit" style="${_btn('#06b6d4')}width:100%;margin-top:2px;">
-              🎯 Auto-fit from Sprite
-            </button>
-            <div style="color:#666;font-size:9px;text-align:center;">${sharedSummary}</div>
-            ${frameTabsHTML}
-          </div>
-
-          <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
-          <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Material</div>
-
-          <div class="prop-row">
-            <span class="prop-label">Friction</span>
-            <input id="phys-friction" type="number" value="${fric}" min="0" max="1" step="0.05" style="width:60px;${_inp()}">
-          </div>
-          <div class="prop-row">
-            <span class="prop-label">Bounce</span>
-            <input id="phys-bounce" type="number" value="${rest}" min="0" max="1" step="0.05" style="width:60px;${_inp()}">
-          </div>
-          <div class="prop-row">
-            <span class="prop-label">Density</span>
-            <input id="phys-density" type="number" value="${dens}" min="0.0001" max="100" step="0.0005" style="width:60px;${_inp()}">
-          </div>
-
-          <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
-          <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Motion</div>
-
-          <div class="prop-row">
-            <span class="prop-label" title="Multiplier applied to world gravity for this body">Gravity scale</span>
-            <input id="phys-gravity-scale" type="number" value="${grav}" min="-10" max="10" step="0.1" style="width:60px;${_inp()}">
-          </div>
-          <div class="prop-row">
-            <span class="prop-label" title="Multiplier applied to horizontal (X) gravity for this body">X Gravity mult</span>
-            <input id="phys-gravity-x-scale" type="number" value="${gravX}" min="-10" max="10" step="0.1" style="width:60px;${_inp()}">
-          </div>
-          <div class="prop-row">
-            <span class="prop-label" title="Resistance to linear movement (air drag)">Linear damp</span>
-            <input id="phys-linear-damp" type="number" value="${ldamp}" min="0" max="100" step="0.05" style="width:60px;${_inp()}">
-          </div>
-          <div class="prop-row">
-            <span class="prop-label" title="Resistance to spinning">Angular damp</span>
-            <input id="phys-angular-damp" type="number" value="${adamp}" min="0" max="100" step="0.05" style="width:60px;${_inp()}">
-          </div>
-
-          <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
-          <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Constraints & Layers</div>
-
-          <div class="prop-row">
-            <span class="prop-label">Fix rotation</span>
-            <input id="phys-fixed-rot" type="checkbox" ${fixRot ? 'checked' : ''} style="width:14px;height:14px;accent-color:#facc15;cursor:pointer;">
-          </div>
-          <div class="prop-row">
-            <span class="prop-label" title="Detects overlaps but causes no collision response">Is sensor</span>
-            <input id="phys-sensor" type="checkbox" ${sensor ? 'checked' : ''} style="width:14px;height:14px;accent-color:#facc15;cursor:pointer;">
-          </div>
-          <div class="prop-row">
-            <span class="prop-label" title="Bitmask — which layer this body belongs to">Category</span>
-            <input id="phys-col-cat" type="number" value="${obj.physicsCollisionCategory ?? 1}" min="1" max="2147483647" step="1" style="width:80px;${_inp()}">
-          </div>
-          <div class="prop-row">
-            <span class="prop-label" title="Bitmask — which layers this body collides with (-1 = all)">Mask</span>
-            <input id="phys-col-mask" type="number" value="${obj.physicsCollisionMask ?? -1}" min="-2147483648" max="2147483647" step="1" style="width:80px;${_inp()}">
-          </div>
-
-          <div style="background:#1a1400;border:1px solid #facc1533;border-radius:3px;padding:4px 6px;font-size:9px;color:#facc1566;">
-            Physics active in play mode ▶
+          <div style="background:#1a1400;border:1px solid #facc1533;border-radius:3px;padding:4px 6px;font-size:9px;color:#facc1566;margin-top:2px;">
+            ▶ Physics runs in Play Mode only
           </div>
           <button id="phys-show-collision" style="${_btn('#facc15')}width:100%;margin-top:2px;font-size:10px;${state.showCollision?'background:#facc1533;':''}">
             ${state.showCollision ? '👁 Hide Collision Shape' : '👁 Show Collision Shape'}
@@ -677,7 +805,6 @@ export function buildPhysicsInspectorHTML(obj) {
       </div>
     </div>`;
 }
-
 function _frameBtn(hasShape, frameId) {
     const active = hasShape;
     return `background:${active ? '#1a1a30' : '#0a0a18'};border:1px solid ${active ? '#7c3aed' : '#1a1a30'};
@@ -815,14 +942,13 @@ export function bindPhysicsInspector(obj) {
 
     typeEl.addEventListener('change', () => {
         obj.physicsBody = typeEl.value;
-        if (extra) extra.style.display = typeEl.value === 'none' ? 'none' : 'flex';
-        // Default to a tight Box matching the visible pixels.
-        // The user can switch to circle/polygon later — their values are kept per-shape.
         if (typeEl.value !== 'none' && !obj._collisionShapeInit) {
             obj.physicsShape = obj.physicsShape || 'box';
             obj._collisionShapeInit = true;
         }
         _pushUndo();
+        // Rebuild the inspector so the contextual settings are correct for the new type
+        import('./engine.ui.js').then(m => m.syncPixiToInspector());
         import('./engine.collision-overlay.js').then(m => m.refreshCollisionOverlay());
     });
 

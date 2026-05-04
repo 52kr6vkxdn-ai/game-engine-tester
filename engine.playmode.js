@@ -20,6 +20,8 @@ export function enterPlayMode() {
     _blockEditorInput(true);     // block selection, scroll, zoom
     _showPlayOverlay();
     _startFPSCounter();
+    // Reset play-mode error counter + open floating console if it exists
+    import('./engine.console.js').then(m => { m.resetPlayErrors(); m.onPlayStart(); });
     // Start animating all objects
     import('./engine.playmode.js').then(m => m.startRuntimeAnimations());
     // Start physics simulation
@@ -533,10 +535,9 @@ function _restoreScene(snap) {
     });
 }
 
-function _logConsole(msg,color='#e0e0e0'){
-    const c=document.getElementById('console-output')||document.getElementById('tab-console');if(!c)return;
-    const l=document.createElement('div');l.style.color=color;l.textContent=msg;
-    c.appendChild(l);c.scrollTop=c.scrollHeight;
+function _logConsole(msg, color = '#e0e0e0') {
+    const level = color === '#f87171' ? 'error' : color === '#facc15' ? 'warn' : color === '#4ade80' ? 'system' : 'log';
+    import('./engine.console.js').then(m => m.engineLog(msg, level));
 }
 
 /* ============================================================

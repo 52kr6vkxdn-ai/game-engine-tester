@@ -66,35 +66,60 @@ export function refreshScriptPanel() {
     if (state.scripts.length === 0) {
         const empty = document.createElement('div');
         empty.style.cssText = 'color:#505060;font-size:11px;padding:20px;font-style:italic;text-align:center;width:100%;';
-        empty.textContent = 'No scripts yet — create one via the Inspector';
+        empty.textContent = 'No scripts yet';
         grid.appendChild(empty);
         return;
     }
 
-    for (const script of state.scripts) {
-        const item = document.createElement('div');
-        item.className = 'asset-item';
-        item.style.cssText = 'cursor:pointer;position:relative;';
-        item.innerHTML = `
-            <div class="asset-thumb" style="background:#0a0f1a;border:1px solid #1e3a5a;">
-                <svg viewBox="0 0 24 24" style="width:26px;height:26px;fill:none;stroke:#7cb9f0;stroke-width:1.5;">
-                    <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
-                </svg>
-            </div>
-            <div class="asset-name" title="${script.name}.js">${script.name.length > 11 ? script.name.slice(0,10)+'…' : script.name}</div>
-            <div class="script-del-btn" style="display:none;position:absolute;top:2px;right:2px;">
-                <button title="Delete" style="background:rgba(24,6,6,.92);border:1px solid #3a1a1a;color:#f87171;border-radius:3px;padding:1px 4px;font-size:10px;cursor:pointer;line-height:1.4;">✕</button>
-            </div>
-        `;
+    // Usage banner
+    const banner = document.createElement('div');
+    banner.style.cssText = 'width:100%;padding:5px 10px;background:#080c12;border-bottom:1px solid #12192a;font-size:9px;color:#2a4a6a;line-height:1.6;';
+    banner.innerHTML = '📎 <b style="color:#3a6a9a;">To use:</b> select a sprite → Inspector → Load Script';
+    grid.appendChild(banner);
+
+    const defaults    = state.scripts.filter(s => s.isDefault);
+    const userScripts = state.scripts.filter(s => !s.isDefault);
+
+    function addSection(label, color, bgColor, scripts) {
+        if (!scripts.length) return;
+        const hdr = document.createElement('div');
+        hdr.style.cssText = `width:100%;padding:4px 10px;color:${color};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;background:${bgColor};border-bottom:1px solid ${color}22;`;
+        hdr.textContent = label;
+        grid.appendChild(hdr);
+        for (const script of scripts) grid.appendChild(_makeScriptCard(script, script.isDefault));
+    }
+
+    addSection('⭐ Built-in Scripts', '#3a7a3a', '#060d06', defaults);
+    addSection('📝 My Scripts',      '#2a5a8a', '#06080d', userScripts);
+}
+
+function _makeScriptCard(script, isDefault) {
+    const item = document.createElement('div');
+    item.className = 'asset-item';
+    item.style.cssText = 'cursor:pointer;position:relative;';
+    const stroke = isDefault ? '#4ade80' : '#7cb9f0';
+    const bg     = isDefault ? '#060d06' : '#06080d';
+    const border = isDefault ? '#1a3a1a' : '#1a2a3a';
+    item.innerHTML = `
+        <div class="asset-thumb" style="background:${bg};border:1px solid ${border};position:relative;">
+            <svg viewBox="0 0 24 24" style="width:26px;height:26px;fill:none;stroke:${stroke};stroke-width:1.5;">
+                <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+            </svg>
+            ${isDefault ? '<div style="position:absolute;bottom:1px;left:0;right:0;text-align:center;font-size:7px;color:#3a7a3a;font-weight:700;">BUILT-IN</div>' : ''}
+        </div>
+        <div class="asset-name" title="${script.name}.js">${script.name.length > 11 ? script.name.slice(0,10)+'…' : script.name}</div>
+        ${!isDefault ? '<div class="script-del-btn" style="display:none;position:absolute;top:2px;right:2px;"><button title="Delete" style="background:rgba(24,6,6,.92);border:1px solid #3a1a1a;color:#f87171;border-radius:3px;padding:1px 4px;font-size:10px;cursor:pointer;line-height:1.4;">✕</button></div>' : ''}
+    `;
+    if (!isDefault) {
         item.addEventListener('mouseenter', () => item.querySelector('.script-del-btn').style.display = 'block');
         item.addEventListener('mouseleave', () => item.querySelector('.script-del-btn').style.display = 'none');
-        item.querySelector('.script-del-btn button').addEventListener('click', e => {
+        item.querySelector('.script-del-btn button')?.addEventListener('click', e => {
             e.stopPropagation();
             if (confirm(`Delete script "${script.name}"?`)) deleteScriptByName(script.name);
         });
-        item.addEventListener('click', () => openScriptEditor(null, script.name, script.code));
-        grid.appendChild(item);
     }
+    item.addEventListener('click', () => openScriptEditor(null, script.name, script.code));
+    return item;
 }
 
 // ── Global message bus (tag/group messaging) ──────────────────
@@ -632,6 +657,10 @@ var floor   = math.floor;
 var ceil    = math.ceil;
 var round   = math.round;
 var PI      = math.PI;
+/** Shorthand for Math.max */
+var max     = Math.max;
+/** Shorthand for Math.min */
+var min     = Math.min;
 
 // ── Time ──────────────────────────────────────────────────
 /** Seconds since Play started */
@@ -1306,11 +1335,6 @@ onMessage("takeDamage", (amount) => {
 }
 
 function _logConsole(msg, color = '#e0e0e0') {
-    const c = document.getElementById('console-output') || document.getElementById('tab-console');
-    if (!c) return;
-    const l = document.createElement('div');
-    l.style.color = color;
-    l.textContent = msg;
-    c.appendChild(l);
-    c.scrollTop = c.scrollHeight;
+    const level = color === '#f87171' ? 'error' : color === '#facc15' ? 'warn' : color === '#4ade80' ? 'system' : 'log';
+    import('./engine.console.js').then(m => m.engineLog(msg, level));
 }
