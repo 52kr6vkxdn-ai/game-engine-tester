@@ -320,22 +320,18 @@ export function refreshSceneSettingsPanel() {
 <div class="component-block" style="border-left:3px solid #8a5a1a; margin:0;">
   <div class="component-header" style="background:#1e1506;">
     <svg viewBox="0 0 24 24" class="comp-icon" style="color:#d4902a;">
-      <line x1="12" y1="2" x2="12" y2="16"/><polyline points="8 12 12 16 16 12"/>
-      <circle cx="12" cy="20" r="2" fill="currentColor"/>
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/>
     </svg>
     <span style="color:#d4a850;font-weight:600;">Physics</span>
   </div>
   <div class="component-body" style="gap:8px;">
-    <div class="prop-row">
-      <span class="prop-label" title="World gravity X — horizontal pull">Gravity X</span>
-      <input type="number" id="scene-gravity-x" value="${ss.gravityX ?? 0}" step="0.1" min="-20" max="20"
-        style="width:70px;background:#1a1a24;border:1px solid #3a2a0a;color:#d8d8e8;border-radius:3px;padding:2px 4px;font-size:11px;">
-    </div>
-    <div class="prop-row">
-      <span class="prop-label" title="World gravity Y — vertical pull (1 = earth-like downward)">Gravity Y</span>
-      <input type="number" id="scene-gravity-y" value="${ss.gravityY ?? 1}" step="0.1" min="-20" max="20"
-        style="width:70px;background:#1a1a24;border:1px solid #3a2a0a;color:#d8d8e8;border-radius:3px;padding:2px 4px;font-size:11px;">
-      <span style="color:#555;font-size:9px;margin-left:4px;">applied at play</span>
+    <div style="background:#0f0a02;border:1px solid #3a2a0a;border-radius:4px;padding:8px 10px;font-size:10px;color:#8a7a4a;line-height:1.7;">
+      <b style="color:#d4a850;">Gravity is per-object, set in scripts.</b><br>
+      • <b>Dynamic</b> bodies fall by default (use <code style="color:#facc15;">this.gravity(0, 9.8)</code> in script)<br>
+      • <b>Kinematic</b> bodies have <b>no gravity</b> — you control all movement<br>
+      • <b>Static</b> bodies never move<br>
+      <span style="color:#5a4a2a;font-size:9px;margin-top:4px;display:block;">Tip: use <code style="color:#facc15;">this.velocityY -= 9.8 * dt</code> for manual gravity</span>
     </div>
   </div>
 </div>`;
@@ -368,7 +364,6 @@ export function refreshSceneSettingsPanel() {
         import('./engine.history.js').then(m => m.pushUndo());
         state.sceneSettings.cameraPreset = presetEl.value;
         if (infoEl) infoEl.textContent = presetInfo[presetEl.value] || '';
-        // Auto-set recommended resolution
         if (presetEl.value === 'portrait') {
             state.sceneSettings.gameWidth  = 720;
             state.sceneSettings.gameHeight = 1280;
@@ -379,17 +374,6 @@ export function refreshSceneSettingsPanel() {
         if (wEl) wEl.value = state.sceneSettings.gameWidth;
         if (hEl) hEl.value = state.sceneSettings.gameHeight;
         import('./engine.playmode.js').then(m => m.drawCameraBounds());
-    });
-
-    const gxEl = panel.querySelector('#scene-gravity-x');
-    const gyEl = panel.querySelector('#scene-gravity-y');
-    gxEl?.addEventListener('focus', () => import('./engine.history.js').then(m => m.pushUndo()));
-    gyEl?.addEventListener('focus', () => import('./engine.history.js').then(m => m.pushUndo()));
-    gxEl?.addEventListener('change', () => {
-        state.sceneSettings.gravityX = parseFloat(gxEl.value) ?? 0;
-    });
-    gyEl?.addEventListener('change', () => {
-        state.sceneSettings.gravityY = parseFloat(gyEl.value) ?? 1;
     });
 }
 

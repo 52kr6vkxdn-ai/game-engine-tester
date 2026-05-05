@@ -57,6 +57,10 @@ export function switchToScene(index) {
     _loadScene(index);
     _refreshSceneButton();
     _refreshSceneDropdown();
+    // Clear scene-scoped variables when the scene changes
+    if (state.isPlaying) {
+        import('./engine.scripting.js').then(m => m.clearSceneVars());
+    }
 }
 
 // ── Rename active scene ───────────────────────────────────────

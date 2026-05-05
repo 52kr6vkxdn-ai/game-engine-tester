@@ -43,16 +43,19 @@ const _pendingCollisions = []; // collected each frame, fired after step
 // ── Fire collision events to the scripting system ─────────────
 function _fireCollisionEvents() {
     if (_pendingCollisions.length === 0) return;
+    const batch = _pendingCollisions.splice(0);
     import('./engine.scripting.js').then(m => {
-        for (const pair of _pendingCollisions) {
-            // Find which of our tracked objects these bodies belong to
+        for (const { p: pair, type } of batch) {
             const entA = _bodies.find(e => e.body === pair.bodyA || _bodyContains(pair.bodyA, e.body));
             const entB = _bodies.find(e => e.body === pair.bodyB || _bodyContains(pair.bodyB, e.body));
             if (entA && entB) {
-                m.triggerCollision(entA.obj, entB.obj);
+                if (type === 'start') {
+                    m.triggerCollision(entA.obj, entB.obj);
+                } else {
+                    m.triggerCollisionEnd(entA.obj, entB.obj);
+                }
             }
         }
-        _pendingCollisions.length = 0;
     });
 }
 
@@ -284,9 +287,10 @@ export async function startPhysics() {
     catch (err) { console.error('[Physics]', err); return; }
 
     const { Engine, Bodies, Body, Composite } = window.Matter;
-    const gx = state.sceneSettings?.gravityX ?? 0;
-    const gy = state.sceneSettings?.gravityY ?? 1;
-    _engine = Engine.create({ gravity: { x: gx, y: gy } });
+    // World gravity is now 0 by default — each dynamic body manages its own
+    // gravity via the physicsGravityScale property, which scripts can control.
+    // Kinematic bodies are never affected by gravity at all.
+    _engine = Engine.create({ gravity: { x: 0, y: 0 } });
     _bodies = [];
     const toAdd = [];
 
@@ -378,10 +382,12 @@ export async function startPhysics() {
 
     // ── Collision event wiring for script callbacks ───────────
     window.Matter.Events.on(_engine, 'collisionStart', (event) => {
-        _pendingCollisions.push(...event.pairs);
+        _pendingCollisions.push(...event.pairs.map(p => ({ p, type:'start' })));
+    });
+    window.Matter.Events.on(_engine, 'collisionEnd', (event) => {
+        _pendingCollisions.push(...event.pairs.map(p => ({ p, type:'end' })));
     });
 
-    const _worldGravity = _engine.gravity;
     let last = null;
     function tick(now) {
         _rafId = requestAnimationFrame(tick);
@@ -418,17 +424,21 @@ export async function startPhysics() {
             B.setAngularVelocity(body, 0);
         }
 
-        // ── PRE-STEP: dynamic gravity scale ──────────────────────
+        // ── PRE-STEP: per-body gravity for dynamic bodies ──────────────
+        // World gravity is 0 — each dynamic body applies its own gravitational
+        // acceleration based on physicsGravityScale (default 1 = 9.8 units/s²).
+        // Kinematic bodies are never affected by gravity.
         for (const { obj, body, type } of _bodies) {
-            if (type === 'static' || type === 'kinematic') continue;
-            const scaleY = (obj.physicsGravityScale  ?? 1) - 1;
-            const scaleX = (obj.physicsGravityXScale ?? 1) - 1;
-            const gs     = _worldGravity.scale ?? 0.001;
-            const forceX = _worldGravity.x * gs * scaleX * body.mass;
-            const forceY = _worldGravity.y * gs * scaleY * body.mass;
-            if (forceX !== 0 || forceY !== 0) {
-                B.applyForce(body, body.position, { x: forceX, y: forceY });
-            }
+            if (type !== 'dynamic') continue;
+            const gravScale = obj.physicsGravityScale ?? 1;
+            if (gravScale === 0) continue;
+            // 9.8 * 0.001 (Matter.js scale factor) * gravScale
+            const gy = 9.8 * 0.001 * gravScale;
+            const gx = (obj.physicsGravityXScale ?? 0) * 9.8 * 0.001;
+            window.Matter.Body.applyForce(body, body.position, {
+                x: gx * body.mass,
+                y: gy * body.mass,
+            });
         }
 
         Engine.update(_engine, dt);
@@ -696,9 +706,13 @@ export function buildPhysicsInspectorHTML(obj) {
         <div style="border-top:1px solid #1a1a30;margin:2px 0;"></div>
         <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Gravity</div>
         <div class="prop-row">
-          <span class="prop-label">Scale</span>
-          <input id="phys-gravity-scale" type="number" value="${grav}" min="-10" max="10" step="0.1" style="width:60px;${_inp()}">
-          <span style="color:#555;font-size:9px;">1=normal, 0=float, −1=invert</span>
+          <span class="prop-label">Scale Y</span>
+          <input id="phys-gravity-scale" type="number" value="${grav}" min="0" max="20" step="0.1" style="width:60px;${_inp()}">
+          <span style="color:#555;font-size:9px;">0=float, 1=normal fall</span>
+        </div>
+        <div style="background:#0a0a18;border:1px solid #1a1a30;border-radius:3px;padding:4px 8px;font-size:9px;color:#4a4a6a;">
+          Or control gravity in script:<br>
+          <code style="color:#7cb9f0;">this.velocityY -= 9.8 * dt</code>
         </div>
     ` : '';
 

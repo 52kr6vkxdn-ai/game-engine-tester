@@ -1,115 +1,129 @@
 /* ============================================================
    Zengine — engine.defaultscripts.js
-   Ships a library of ready-to-use game scripts.
-   Called once when the engine first starts (or on new project).
-   Users can attach these scripts to any sprite and start playing.
+   Ready-to-use starter scripts. Injected into every new project.
 
-   Included scripts:
-     1. PlatformerPlayer   — WASD/arrows + jump, with kinematic body
-     2. TopDownPlayer      — 8-directional movement + aim at mouse
-     3. PatrolEnemy        — back-and-forth patrol, sends messages
-     4. HealthSystem       — HP bar, onMessage("takeDamage")
-     5. CameraFollow       — makes the scene camera track this object
-     6. Rotator             — simple constant rotation (great for coins)
-     7. Destroyer           — destroys self after a timer (bullets, FX)
-     8. Oscillator          — smooth sine-wave bobbing motion
+   Users attach these to any sprite via Inspector → Load Script.
+
+   Scripts:
+     PlatformerPlayer  — WASD/arrows + jump + gravity
+     TopDownPlayer     — 8-dir movement + mouse aim + camera
+     PatrolEnemy       — patrol + player detection + messaging
+     HealthSystem      — HP, damage, heal, flash invincibility
+     Rotator           — constant rotation (coins, hazards)
+     Destroyer         — self-destruct after a timer with fade
+     Oscillator        — sine-wave bobbing motion
+     SceneManager      — handles scene transitions & score display
    ============================================================ */
 
 export const DEFAULT_SCRIPTS = [
 
-/* ── 1. Platformer Player ───────────────────────────────────── */
+// ── 1. Platformer Player ─────────────────────────────────────
 {
     name: 'PlatformerPlayer',
     code: `// ============================================================
 // PLATFORMER PLAYER
 // Requires: Kinematic physics body on this object
-//           A tilemap or static objects below to stand on
+//           A tilemap or static floor below to land on
 //
 // Controls:
-//   A / D or Arrow Left/Right  — move
-//   W / Space or Arrow Up      — jump
+//   A / D  or  ← →     move left / right
+//   W / Space  or  ↑   jump
 // ============================================================
 
-// ── Tuning knobs ─────────────────────────────────────────────
-const SPEED      = 5;     // horizontal move speed (world units/sec)
-const JUMP_FORCE = 8;     // jump velocity (world units/sec)
-const GRAVITY    = 20;    // manual gravity applied each frame
-const MAX_FALL   = 20;    // terminal falling speed
+// ── Tuning ───────────────────────────────────────────────────
+const SPEED       = 5;     // world units per second
+const JUMP_FORCE  = 10;    // velocity applied on jump
+const GRAVITY     = -25;   // downward acceleration (negative = down)
+const MAX_FALL    = -20;   // terminal velocity cap
+const COYOTE_TIME = 0.12;  // seconds you can still jump after leaving a ledge
 
-// ── Internal state ────────────────────────────────────────────
-var isGrounded  = false;
-var groundTimer = 0;     // small grace period so you can still jump just after leaving a ledge
-var facing      = 1;     // 1 = right, -1 = left
+// ── State ────────────────────────────────────────────────────
+var grounded    = false;
+var coyote      = 0;       // coyote time counter
+var jumpPressed = false;
+var facing      = 1;       // 1 = right, -1 = left
 
 onStart(() => {
   setTag("player");
+  setGroup("characters");
   log("Platformer Player ready!");
-  log("A/D or arrows = move  |  W/Space = jump");
+  log("A/D = move  |  W or Space = jump");
+
+  // Make the camera follow this object smoothly
+  cameraFollow(find(getTag()), 7);
 });
 
 onUpdate((dt) => {
 
-  // ── Horizontal input ───────────────────────────────────────
-  const h = axisH();
-  if (h !== 0) facing = h;
+  // ── Gravity ────────────────────────────────────────────────
+  velocityY += GRAVITY * dt;
+  velocityY  = max(velocityY, MAX_FALL);
+
+  // ── Horizontal movement ───────────────────────────────────
+  var h = axisH();
+  velocityX = h * SPEED;
+  if (h !== 0) facing = h > 0 ? 1 : -1;
   setScaleX(facing);   // flip sprite to face direction
 
-  // Move horizontally by overriding velocity X directly
-  velocityX = h * SPEED;
-
-  // ── Gravity (manual — works without a physics body too) ────
-  velocityY -= GRAVITY * dt;
-  velocityY  = clamp(velocityY, -MAX_FALL, MAX_FALL);
-
-  // ── Jump ───────────────────────────────────────────────────
-  groundTimer = max(0, groundTimer - dt);
+  // ── Jump ──────────────────────────────────────────────────
+  coyote = max(0, coyote - dt);
   if (isKeyJustDown("w") || isKeyJustDown("arrowup") || isKeyJustDown(" ")) {
-    if (isGrounded || groundTimer > 0) {
-      velocityY  = JUMP_FORCE;
-      isGrounded = false;
-      groundTimer = 0;
+    if (grounded || coyote > 0) {
+      velocityY = JUMP_FORCE;
+      grounded  = false;
+      coyote    = 0;
     }
   }
 
   // ── Animation ─────────────────────────────────────────────
-  if (!isGrounded) {
+  if (!grounded) {
     playAnimation(velocityY > 0 ? "jump" : "fall");
-  } else if (abs(h) > 0.1) {
+  } else if (abs(velocityX) > 0.1) {
     playAnimation("run");
   } else {
     playAnimation("idle");
   }
 
+  // ── Score display ─────────────────────────────────────────
+  // sceneVar.score is set by other scripts (coins, enemies etc.)
+  // log("Score: " + (sceneVar.score || 0));
+
 });
 
-onCollision((other) => {
-  // A collision with anything below us means we're grounded.
-  // We detect "below" by checking if our Y is above the other object.
+onCollisionEnter((other) => {
   if (!other) return;
-  if (getY() > other.y - 0.5) {
-    isGrounded  = true;
-    groundTimer = 0.15;   // coyote time
-    if (velocityY < 0) velocityY = 0;   // stop falling
+  // Landing detection: we're above the other object
+  if (getY() > other.y) {
+    grounded  = true;
+    coyote    = COYOTE_TIME;
+    if (velocityY < 0) velocityY = 0;
+  }
+});
+
+onCollisionExit((other) => {
+  // Left a surface — start coyote timer
+  if (grounded) {
+    grounded = false;
+    coyote   = COYOTE_TIME;
   }
 });
 
 onStop(() => {
   velocityX = 0;
   velocityY = 0;
+  grounded  = false;
 });
 `,
 },
 
-/* ── 2. Top-Down Player ─────────────────────────────────────── */
+// ── 2. Top-Down Player ───────────────────────────────────────
 {
     name: 'TopDownPlayer',
     code: `// ============================================================
 // TOP-DOWN PLAYER
-// 8-directional movement + optional mouse aim
-//
-// Controls:
-//   W A S D or Arrow Keys  — move
-//   Mouse                  — aim / face direction
+// 8-directional WASD/arrows movement.
+// Camera follows this object smoothly.
+// Mouse rotates the player to aim.
 // ============================================================
 
 const SPEED = 5;   // world units per second
@@ -118,172 +132,183 @@ onStart(() => {
   setTag("player");
   log("Top-Down Player ready!");
   log("WASD or arrows = move  |  Mouse = aim");
+
+  // Camera follows this object
+  cameraFollow(find(getTag()), 6);
 });
 
 onUpdate((dt) => {
 
-  // ── Movement ───────────────────────────────────────────────
-  const h = axisH();
-  const v = axisV();
-
+  // ── Movement ──────────────────────────────────────────────
+  var h = axisH();
+  var v = axisV();
   move(h * SPEED * dt, v * SPEED * dt);
 
-  // ── Normalise diagonal so you don't move faster diagonally ─
-  // (already handled by individual move() calls with dt)
-
-  // ── Face the mouse ─────────────────────────────────────────
-  // input.mouseX/Y are in screen pixels; divide by 100 to get world units
-  lookAt(input.mouseX / 100, -input.mouseY / 100);
+  // ── Aim toward mouse ──────────────────────────────────────
+  lookAt(mouseX(), mouseY());
 
   // ── Animation ─────────────────────────────────────────────
-  const moving = abs(h) > 0.1 || abs(v) > 0.1;
+  var moving = abs(h) > 0.01 || abs(v) > 0.01;
   playAnimation(moving ? "walk" : "idle");
 
 });
 
-onStop(() => {
-  // nothing to clean up
+onOverlapEnter((other) => {
+  // Pick up coins / items without needing a physics body
+  if (other.tag === "coin") {
+    sceneVar.score = (sceneVar.score || 0) + 1;
+    log("Score: " + sceneVar.score);
+    destroy(other);
+  }
 });
+
+onMessage("enemySpotted", () => {
+  warn("Enemy has spotted you!");
+});
+
+onStop(() => { /* nothing to clean up */ });
 `,
 },
 
-/* ── 3. Patrol Enemy ────────────────────────────────────────── */
+// ── 3. Patrol Enemy ──────────────────────────────────────────
 {
     name: 'PatrolEnemy',
     code: `// ============================================================
 // PATROL ENEMY
-// Walks back and forth between two patrol points.
-// Broadcasts a "playerDetected" message when the player
-// gets close, and listens for "takeDamage".
+// Walks back and forth. Detects the player. Responds to damage.
 //
-// Setup:
-//   Give this object a kinematic or dynamic physics body.
-//   Adjust PATROL_DIST and DETECT_RANGE below.
+// Setup:  Give this object a Kinematic or Dynamic physics body.
+//         Attach HealthSystem script as well for full HP logic.
 // ============================================================
 
-const SPEED       = 2.5;  // patrol speed (world units/sec)
-const PATROL_DIST = 4;    // how far to walk each direction (world units)
-const DETECT_RANGE= 3;    // distance at which the player is spotted
-const MAX_HP      = 3;    // hit points
+const SPEED        = 2.5;   // patrol speed
+const PATROL_DIST  = 4;     // world units each direction
+const DETECT_RANGE = 4;     // units to spot the player
+var HP             = 3;     // starting health points
 
-var startX   = 0;
-var dirX     = 1;   // 1 = right, -1 = left
-var hp       = MAX_HP;
-var alerted  = false;
+var startX  = 0;
+var dirX    = 1;    // 1 = right, -1 = left
+var alerted = false;
 
 onStart(() => {
   setTag("enemy");
+  setGroup("enemies");
   startX = getX();
-  log("Patrol Enemy ready (HP: " + MAX_HP + ")");
+  log("Patrol Enemy ready (HP: " + HP + ")");
 });
 
 onUpdate((dt) => {
-  if (hp <= 0) return;
+  if (HP <= 0) return;
 
-  // ── Patrol movement ────────────────────────────────────────
-  translate(dirX * SPEED * dt, 0);
-  setScaleX(dirX);   // flip to face direction
+  // ── Patrol ────────────────────────────────────────────────
+  move(dirX * SPEED * dt, 0);
+  setScaleX(dirX);
 
-  // Reverse direction at patrol bounds
-  if (getX() > startX + PATROL_DIST) { dirX = -1; }
-  if (getX() < startX - PATROL_DIST) { dirX =  1; }
+  if (getX() > startX + PATROL_DIST) dirX = -1;
+  if (getX() < startX - PATROL_DIST) dirX =  1;
 
-  // ── Player detection ───────────────────────────────────────
-  const player = findWithTag("player");
+  // ── Player detection ──────────────────────────────────────
+  var player = findWithTag("player");
   if (player) {
-    const d = dist(getX(), getY(), player.x, player.y);
+    var d = dist(getX(), getY(), player.x, player.y);
     if (d < DETECT_RANGE && !alerted) {
       alerted = true;
-      broadcast("player", "enemySpotted");   // tell player they were spotted
-      log("Player detected!");
+      // Tell the player they've been spotted
+      broadcast("player", "enemySpotted");
+      warn("Player detected at distance " + d.toFixed(1));
     }
-    if (d >= DETECT_RANGE + 1) alerted = false;   // lost sight
+    if (d >= DETECT_RANGE + 1) alerted = false;
   }
 });
 
-// ── Receive damage ─────────────────────────────────────────
+onCollisionEnter((other) => {
+  if (!other || other.tag === "player") return;
+  // Reverse direction when hitting a wall
+  dirX *= -1;
+});
+
 onMessage("takeDamage", (amount) => {
-  hp -= (amount || 1);
-  warn("Enemy hit! HP remaining: " + hp);
-  if (hp <= 0) {
+  HP -= (amount || 1);
+  warn("Enemy hit! HP: " + HP);
+  if (HP <= 0) {
     log("Enemy defeated!");
-    hide();           // hide the sprite
-    destroySelf();    // remove from scene
+    sceneVar.score = (sceneVar.score || 0) + 10;
+    destroySelf();
   }
 });
 
-onCollision((other) => {
-  if (!other) return;
-  // If we hit a wall (no name match) reverse direction
-  if (other.name !== "player") dirX *= -1;
+onMessage("freeze", () => {
+  dirX = 0;   // stop moving
 });
 
 onStop(() => {
-  hp = MAX_HP;
+  HP = 3;
   alerted = false;
 });
 `,
 },
 
-/* ── 4. Health System ───────────────────────────────────────── */
+// ── 4. Health System ─────────────────────────────────────────
 {
     name: 'HealthSystem',
     code: `// ============================================================
 // HEALTH SYSTEM
-// Attach to any object to give it health.
-// Listens for "takeDamage" and "heal" messages.
-// Broadcasts "died" when HP reaches 0.
+// Gives any object hitpoints, damage, healing and death.
+// Works via messages — attach to any object.
 //
-// Example: from another script — sendMessage("player", "takeDamage", 1)
+// Example usage from another script:
+//   sendMessage("player", "takeDamage", 1)
+//   sendMessage("player", "heal", 2)
 // ============================================================
 
-const MAX_HP = 10;
+const MAX_HP     = 10;
+const I_FRAMES   = 1.0;   // seconds of invincibility after being hit
 
 var hp          = MAX_HP;
-var invincible  = false;   // brief invincibility after being hit
+var invincible  = false;
 var iTimer      = 0;
-const I_TIME    = 1.0;     // invincibility duration in seconds
 
 onStart(() => {
   hp = MAX_HP;
-  log(getName() + " HP: " + hp + " / " + MAX_HP);
+  setAlpha(1);
+  log("Health: " + hp + " / " + MAX_HP);
 });
 
-function getName() { return find(getTag()) ? getTag() : "Object"; }
-
 onUpdate((dt) => {
+  // Invincibility flash effect
   if (invincible) {
     iTimer -= dt;
-    // Flash the sprite while invincible
-    setAlpha(iTimer % 0.2 < 0.1 ? 0.3 : 1.0);
-    if (iTimer <= 0) { invincible = false; setAlpha(1); }
+    setAlpha(iTimer % 0.15 < 0.075 ? 0.25 : 1.0);
+    if (iTimer <= 0) {
+      invincible = false;
+      setAlpha(1);
+    }
   }
 });
 
 onMessage("takeDamage", (amount) => {
   if (invincible) return;
   hp -= (amount || 1);
-  log("Took " + amount + " damage — HP: " + hp + "/" + MAX_HP);
+  hp  = max(0, hp);
+  warn("Took " + amount + " damage — HP: " + hp + "/" + MAX_HP);
   invincible = true;
-  iTimer = I_TIME;
+  iTimer     = I_FRAMES;
+  // Camera shake on hit
+  cameraShake(0.15, 0.2);
   if (hp <= 0) {
-    hp = 0;
     log("Died!");
-    broadcastAll("died");
-    hide();
+    broadcastAll("entityDied");
     destroySelf();
   }
 });
 
 onMessage("heal", (amount) => {
-  hp = clamp(hp + (amount || 1), 0, MAX_HP);
-  log("Healed to " + hp + "/" + MAX_HP);
+  hp = min(hp + (amount || 1), MAX_HP);
   setAlpha(1);
+  log("Healed → HP: " + hp + "/" + MAX_HP);
 });
 
-onMessage("getHP", () => {
-  return hp;
-});
+onMessage("getHP", () => hp);
 
 onStop(() => {
   hp = MAX_HP;
@@ -293,96 +318,50 @@ onStop(() => {
 `,
 },
 
-/* ── 5. Camera Follow ───────────────────────────────────────── */
-{
-    name: 'CameraFollow',
-    code: `// ============================================================
-// CAMERA FOLLOW
-// Attaches to any object and makes the viewport follow it.
-// Uses the engine's sceneContainer to pan the camera.
-// ============================================================
-
-const SMOOTH  = 6;    // higher = snappier camera (0 = instant)
-const OFFSET_X= 0;    // horizontal offset from the target (world units)
-const OFFSET_Y= 1;    // vertical offset (positive = above target)
-
-// Camera dead-zone: camera only moves if target is outside this box
-const DEAD_X  = 1;
-const DEAD_Y  = 0.5;
-
-onStart(() => {
-  log("CameraFollow active — tracking " + find("player")?.name);
-});
-
-onUpdate((dt) => {
-  // Target: follow the first object tagged "player"
-  // You can change "player" to any label or tag.
-  const target = findWithTag("player") || find("player");
-  if (!target) return;
-
-  // World centre of the viewport (scene container pivot)
-  // The engine stores the camera offset in state.sceneContainer
-  // which we can nudge via translate on a dedicated camera object.
-  // Simpler: just move this (invisible) object and use its position
-  // to offset scene objects or rely on PixiJS camera tracking.
-
-  // Move this object smoothly toward the target
-  const tx = target.x + OFFSET_X;
-  const ty = target.y + OFFSET_Y;
-  const dx = tx - getX();
-  const dy = ty - getY();
-
-  // Dead zone
-  if (abs(dx) < DEAD_X && abs(dy) < DEAD_Y) return;
-
-  const t = clamp(SMOOTH * dt, 0, 1);
-  translate(dx * t, dy * t);
-});
-`,
-},
-
-/* ── 6. Rotator ─────────────────────────────────────────────── */
+// ── 5. Rotator ────────────────────────────────────────────────
 {
     name: 'Rotator',
     code: `// ============================================================
 // ROTATOR
-// Constantly rotates this object. Great for coins, power-ups,
-// spinning saw blades, loading spinners, etc.
+// Rotates this object at a constant speed.
+// Great for coins, spinning hazards, loading icons.
 // ============================================================
 
-const SPEED = 180;   // degrees per second (positive = clockwise)
+const DEGREES_PER_SECOND = 180;   // positive = clockwise
 
 onUpdate((dt) => {
-  setRotation(getRotation() + SPEED * dt);
+  setRotation(getRotation() + DEGREES_PER_SECOND * dt);
 });
 `,
 },
 
-/* ── 7. Destroyer ───────────────────────────────────────────── */
+// ── 6. Destroyer ─────────────────────────────────────────────
 {
     name: 'Destroyer',
     code: `// ============================================================
 // DESTROYER
-// Destroys this object after a set time.
-// Perfect for bullets, explosion effects, pickup flash FX.
+// Removes this object after a set lifetime.
+// Fades out near the end.
+// Perfect for: bullets, explosions, pickup flashes, VFX.
 // ============================================================
 
-const LIFETIME = 3.0;   // seconds until this object disappears
+const LIFETIME   = 3.0;   // seconds until removed
+const FADE_START = 0.8;   // seconds before death to begin fading
 
 var elapsed = 0;
-var fadeStart = 0.5;    // start fading out this many seconds before death
 
 onStart(() => {
   elapsed = 0;
+  setAlpha(1);
 });
 
 onUpdate((dt) => {
   elapsed += dt;
 
-  // Fade out near the end of lifetime
-  if (elapsed > LIFETIME - fadeStart) {
-    const remaining = LIFETIME - elapsed;
-    setAlpha(clamp(remaining / fadeStart, 0, 1));
+  // Fade out in the last FADE_START seconds
+  if (elapsed > LIFETIME - FADE_START) {
+    var t = (LIFETIME - elapsed) / FADE_START;
+    setAlpha(clamp(t, 0, 1));
   }
 
   if (elapsed >= LIFETIME) {
@@ -392,19 +371,19 @@ onUpdate((dt) => {
 `,
 },
 
-/* ── 8. Oscillator ──────────────────────────────────────────── */
+// ── 7. Oscillator ────────────────────────────────────────────
 {
     name: 'Oscillator',
     code: `// ============================================================
 // OSCILLATOR
-// Makes this object bob up and down (or side to side) smoothly
-// using a sine wave. Perfect for floating platforms, coins,
-// decorative elements.
+// Bobs this object up and down (or side to side) with a
+// smooth sine wave.
+// Great for: floating platforms, coins, decorative elements.
 // ============================================================
 
-const AMPLITUDE = 0.5;   // how far to move (world units)
-const FREQUENCY = 1.0;   // oscillations per second
-const AXIS      = "y";   // "y" = up/down, "x" = left/right
+const AMPLITUDE  = 0.5;   // how far to move (world units)
+const FREQUENCY  = 1.0;   // oscillations per second
+const AXIS       = "y";   // "y" = up/down,  "x" = left/right
 
 var originX = 0;
 var originY = 0;
@@ -415,24 +394,100 @@ onStart(() => {
 });
 
 onUpdate((dt) => {
-  const offset = sin(getTime() * frequency * PI * 2) * AMPLITUDE;
+  var t      = getTime() * FREQUENCY * PI * 2;
+  var offset = sin(t) * AMPLITUDE;
+
   if (AXIS === "y") {
     setY(originY + offset);
   } else {
     setX(originX + offset);
   }
 });
+`,
+},
 
-var frequency = FREQUENCY;
+// ── 8. Scene Manager ─────────────────────────────────────────
+{
+    name: 'SceneManager',
+    code: `// ============================================================
+// SCENE MANAGER
+// Manages score, lives, and scene transitions.
+// Attach to any persistent object (like a UI overlay sprite).
+//
+// Other scripts can do:
+//   sceneVar.score += 10;
+//   sendMessage("scenemanager", "nextScene");
+//   sendMessage("scenemanager", "restartScene");
+// ============================================================
+
+onStart(() => {
+  setTag("scenemanager");
+
+  // Initialise shared variables so all scripts can use them
+  sceneVar.score  = sceneVar.score  || 0;
+  sceneVar.lives  = sceneVar.lives  || 3;
+  sceneVar.paused = false;
+
+  // Persist score across scenes
+  globalVar.highScore = globalVar.highScore || 0;
+
+  log("Scene: " + currentScene() + "  (scene " + (currentSceneIndex()+1) + " of " + sceneCount() + ")");
+  log("Score: " + sceneVar.score + "  Lives: " + sceneVar.lives);
+});
+
+onUpdate((dt) => {
+  // Update high score continuously
+  if (sceneVar.score > (globalVar.highScore || 0)) {
+    globalVar.highScore = sceneVar.score;
+  }
+});
+
+onMessage("nextScene", () => {
+  var next = currentSceneIndex() + 1;
+  if (next < sceneCount()) {
+    log("Going to scene: " + getSceneName(next));
+    gotoScene(next);
+  } else {
+    log("No more scenes! Final score: " + sceneVar.score);
+    broadcastAll("gameComplete");
+  }
+});
+
+onMessage("restartScene", () => {
+  log("Restarting scene: " + currentScene());
+  gotoScene(currentSceneIndex());
+});
+
+onMessage("gotoScene", (nameOrIndex) => {
+  gotoScene(nameOrIndex);
+});
+
+onMessage("addScore", (amount) => {
+  sceneVar.score += (amount || 1);
+  log("Score: " + sceneVar.score);
+});
+
+onMessage("loseLife", () => {
+  sceneVar.lives--;
+  warn("Lives remaining: " + sceneVar.lives);
+  if (sceneVar.lives <= 0) {
+    broadcastAll("gameOver");
+    log("GAME OVER — final score: " + sceneVar.score);
+  }
+});
+
+onMessage("entityDied", () => {
+  // Called by HealthSystem when something dies
+  sceneVar.score += 5;
+});
 `,
 },
 
 ];
 
-// ── Inject default scripts into a fresh project ────────────────
+// ── Inject default scripts into a fresh project ───────────────
 export function injectDefaultScripts(scriptStore) {
     for (const ds of DEFAULT_SCRIPTS) {
-        // Only add if not already present (don't overwrite user edits)
         if (!scriptStore.find(s => s.name === ds.name)) {
             scriptStore.push({
                 id:        'default_' + ds.name,
