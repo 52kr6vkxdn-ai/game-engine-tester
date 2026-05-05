@@ -60,7 +60,7 @@ export function stopPlayMode() {
     // Stop physics
     import('./engine.physics.js').then(m => m.stopPhysics());
     // Stop 3D positional audio
-    import('./engine.audio.js').then(m => m.stopPlayAudio());
+    import('./engine.audio.js').then(m => { m.stopPlayAudio(); m._stopAllScriptSounds(); });
     // Stop user scripts
     import('./engine.scripting.js').then(m => m.stopScripts());
     _blockEditorInput(false);    // restore input
@@ -598,28 +598,16 @@ function _startCulling() {
 
     _cullTicker = () => {
         if (!state.isPlaying || !state.app || !state.sceneContainer) return;
+        // Update the scene clipping mask every frame so it stays in sync
+        // with camera movement (including cameraFollow).
         _updateSceneMask();
         // Update 3D audio listener position every frame
         import('./engine.audio.js').then(m => m.updateAudioListener());
-
-        const sc  = state.sceneContainer;
-        const hw  = getGameWidth()  / 2;
-        const hh  = getGameHeight() / 2;
-        const camLeft   = sc.x - hw * sc.scale.x;
-        const camRight  = sc.x + hw * sc.scale.x;
-        const camTop    = sc.y - hh * sc.scale.y;
-        const camBottom = sc.y + hh * sc.scale.y;
-
-        for (const obj of state.gameObjects) {
-            try {
-                const bounds = obj.getBounds();
-                if (!bounds || bounds.width < 0.5 || bounds.height < 0.5) continue;
-                const outside = bounds.right  < camLeft  || bounds.left   > camRight ||
-                                bounds.bottom < camTop   || bounds.top    > camBottom;
-                obj.visible    = !outside;
-                obj._wasCulled = outside;
-            } catch (_) {}
-        }
+        // NOTE: We do NOT cull individual object visibility here.
+        // The Pixi mask (_sceneMask) already clips everything outside the camera
+        // bounds perfectly. Per-object visibility culling causes objects to flicker
+        // or disappear when the camera follows a moving target, and it also fights
+        // any setVisible(false) calls from scripts.
     };
     state.app.ticker.add(_cullTicker);
 }
@@ -650,9 +638,9 @@ function _stopCulling() {
         try { state.app?.stage?.removeChild(_sceneMask); _sceneMask.destroy(); } catch (_) {}
         _sceneMask = null;
     }
-    // Restore visibility
+    // Note: we do NOT forcibly restore obj.visible here — the playmode restore
+    // snapshots handle that. Just clear the culling flag.
     for (const obj of state.gameObjects) {
-        obj.visible    = true;
         obj._wasCulled = false;
     }
 }

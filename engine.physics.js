@@ -398,11 +398,12 @@ export async function startPhysics() {
 
         const { Body: B } = window.Matter;
 
-        // ── PRE-STEP: kinematic bodies move via velocity (not teleport)
-        // This is the critical fix: Matter.js only resolves collisions when
-        // bodies have velocity. Calling setPosition() alone bypasses the
-        // collision detection entirely, causing pass-through on tilemaps
-        // and dynamic objects.
+        // ── PRE-STEP: kinematic bodies ─────────────────────────────────
+        // Two ways scripts move kinematic bodies:
+        // 1. Position-based: move()/moveTo()/setX() — these sync obj.x/y AND body position immediately
+        //    so the delta here is ~0. We just ensure velocity is zero so body stays put.
+        // 2. Velocity-based: velocityX = 5 — ScriptInstance.update() called Body.setVelocity directly.
+        //    We must NOT override that velocity. We detect this via obj._kinematicVelDriven flag.
         for (const { obj, body, type } of _bodies) {
             if (type !== 'kinematic') continue;
 
@@ -412,13 +413,22 @@ export async function startPhysics() {
             const targetX = obj.x + off.x * cosR - off.y * sinR;
             const targetY = obj.y + off.x * sinR + off.y * cosR;
 
-            // Drive velocity to reach the target this frame.
-            // Matter's collision resolution then pushes back if something is in the way.
-            if (dtSec > 0) {
-                B.setVelocity(body, {
-                    x: (targetX - body.position.x) / dtSec,
-                    y: (targetY - body.position.y) / dtSec,
-                });
+            const dx = targetX - body.position.x;
+            const dy = targetY - body.position.y;
+
+            if (obj._kinematicVelDriven) {
+                // Script is using velocityX/Y — body velocity already set, don't override
+                obj._kinematicVelDriven = false; // reset flag each frame
+            } else {
+                // Position-based: drive velocity to match any remaining delta
+                const THRESHOLD = 0.5;
+                if (dtSec > 0 && (Math.abs(dx) > THRESHOLD || Math.abs(dy) > THRESHOLD)) {
+                    B.setVelocity(body, { x: dx / dtSec, y: dy / dtSec });
+                } else {
+                    // No movement — zero velocity so body doesn't drift
+                    B.setVelocity(body, { x: 0, y: 0 });
+                    B.setPosition(body, { x: targetX, y: targetY });
+                }
             }
             B.setAngle(body, obj.rotation || 0);
             B.setAngularVelocity(body, 0);
@@ -443,7 +453,7 @@ export async function startPhysics() {
 
         Engine.update(_engine, dt);
 
-        // ── POST-STEP: sync Matter body positions back to sprites ──
+        // ── POST-STEP: sync Matter body positions back to sprites ──────
         for (const { obj, body, type } of _bodies) {
             if (type === 'static') continue;
             const off  = body._zenOffset || { x: 0, y: 0 };
@@ -451,11 +461,17 @@ export async function startPhysics() {
             const sinR = Math.sin(body.angle);
 
             if (type === 'kinematic') {
-                // After the physics step the body may have been pushed back by
-                // a collider — read the resolved position back onto the sprite.
-                obj.x = body.position.x - (off.x * cosR - off.y * sinR);
-                obj.y = body.position.y - (off.x * sinR + off.y * cosR);
-                // Don't override rotation for kinematic — script owns it.
+                // After physics step, the body may have been pushed by a collider.
+                // Compute where the physics says the sprite origin should be.
+                const resolvedX = body.position.x - (off.x * cosR - off.y * sinR);
+                const resolvedY = body.position.y - (off.x * sinR + off.y * cosR);
+
+                // Only update sprite position from physics — do NOT update
+                // if the difference is just floating-point noise from the same frame.
+                // This prevents the physics tick from fighting the script.
+                obj.x = resolvedX;
+                obj.y = resolvedY;
+                // Rotation stays script-owned for kinematic bodies
             } else {
                 // Dynamic: body fully drives sprite
                 obj.x = body.position.x - (off.x * cosR - off.y * sinR);
@@ -476,7 +492,6 @@ export async function startPhysics() {
 
 export function stopPhysics() {
     if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
-    // Detach onFrameChange hooks and clear runtime frame ids
     for (const { obj } of _bodies) {
         const as = obj?._runtimeSprite;
         if (as && as.onFrameChange) as.onFrameChange = null;
@@ -490,6 +505,39 @@ export function stopPhysics() {
     _engine = null;
     _bodies = [];
     _pendingCollisions.length = 0;
+}
+
+/**
+ * Rebuild or remove the physics body for a specific object.
+ * Called by scripts when they change physics type at runtime.
+ */
+export function rebuildBodyForObject(obj) {
+    if (!_engine || !window.Matter) return;
+    const { Bodies, Body, Composite } = window.Matter;
+
+    // Remove existing body for this object
+    const idx = _bodies.findIndex(e => e.obj === obj);
+    if (idx !== -1) {
+        const { body } = _bodies[idx];
+        try { Composite.remove(_engine.world, body); } catch(_) {}
+        delete obj._physicsBody;
+        _bodies.splice(idx, 1);
+    }
+
+    const type = obj.physicsBody;
+    if (!type || type === 'none') return;
+
+    const body = _makeBody(Bodies, Body, obj, obj.x, obj.y);
+    if (!body) return;
+
+    if (type !== 'static') Body.setAngle(body, obj.rotation || 0);
+    if (type === 'kinematic') Body.setInertia(body, Infinity);
+    if (obj.physicsFixedRotation && type === 'dynamic') Body.setInertia(body, Infinity);
+
+    body.isSensor = !!obj.physicsIsSensor;
+    Composite.add(_engine.world, body);
+    _bodies.push({ obj, body, type });
+    obj._physicsBody = body;
 }
 
 // Rebuild a body when the visible animation frame changes, preserving the

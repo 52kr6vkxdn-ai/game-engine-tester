@@ -125,10 +125,15 @@ function _makeScriptCard(script, isDefault) {
 
 // ── Scene-level shared variables (reset on scene change) ──────
 const _sceneVars  = {};
-// ── Global variables (persist across scenes) ──────────────────
+// ── Global variables — ONE shared object, all scripts see it ──
+// This is a true singleton. Any script can write globalVar.score = 10
+// and every other script reading globalVar.score sees 10.
+// Survives scene changes. Only cleared when Play is stopped.
 const _globalVars = {};
 
 export function clearSceneVars()  { for (const k in _sceneVars)  delete _sceneVars[k];  }
+// globalVar intentionally NOT cleared on scene change — that's the whole point.
+// Only clear on Play stop so data doesn't bleed between play sessions.
 export function clearGlobalVars() { for (const k in _globalVars) delete _globalVars[k]; }
 
 // ── Camera API (wraps sceneContainer in play mode) ────────────
@@ -260,6 +265,25 @@ function _isOverlapping(objA, objB) {
     return _aabbOverlap(objA, objB);
 }
 
+// ── Script timer system (wait X seconds then call fn) ─────────
+const _timers = [];
+
+function _scheduleTimer(seconds, fn) {
+    _timers.push({ remaining: seconds, fn });
+}
+
+function _tickTimers(dt) {
+    for (let i = _timers.length - 1; i >= 0; i--) {
+        _timers[i].remaining -= dt;
+        if (_timers[i].remaining <= 0) {
+            try { _timers[i].fn(); } catch (e) { _logConsole(`Timer error: ${e.message}`, '#f87171'); }
+            _timers.splice(i, 1);
+        }
+    }
+}
+
+function _clearTimers() { _timers.length = 0; }
+
 // ── Sandbox API builder ───────────────────────────────────────
 function _buildSandbox(obj, instRef) {
     const _keys         = new Set();
@@ -289,10 +313,22 @@ function _buildSandbox(obj, instRef) {
         // ── POSITION — this.x, this.y ─────────────────────────
         /** World X position of this object */
         get x()  { return  obj.x  / 100; },
-        set x(v) { obj.x  =  v * 100; },
+        set x(v) {
+            obj.x = v * 100;
+            if (obj.physicsBody === 'kinematic' && obj._physicsBody && window.Matter) {
+                const p = obj._physicsBody.position;
+                window.Matter.Body.setPosition(obj._physicsBody, { x: v * 100, y: p.y });
+            }
+        },
         /** World Y position of this object */
         get y()  { return -obj.y  / 100; },
-        set y(v) { obj.y  = -v * 100; },
+        set y(v) {
+            obj.y = -v * 100;
+            if (obj.physicsBody === 'kinematic' && obj._physicsBody && window.Matter) {
+                const p = obj._physicsBody.position;
+                window.Matter.Body.setPosition(obj._physicsBody, { x: p.x, y: -v * 100 });
+            }
+        },
 
         // ── VELOCITY ─────────────────────────────────────────
         /** Horizontal velocity in world units/second (auto-applied each frame) */
@@ -350,10 +386,46 @@ function _buildSandbox(obj, instRef) {
 
         // ── MOVEMENT HELPERS ─────────────────────────────────
         /** Move by (dx, dy) world units this frame */
-        move(dx, dy)      { obj.x += dx * 100; obj.y -= dy * 100; },
-        translate(dx, dy) { obj.x += dx * 100; obj.y -= dy * 100; },
-        /** Warp to exact position */
-        moveTo(x, y)      { obj.x =  x * 100; obj.y = -y * 100; },
+        move(dx, dy) {
+            obj.x += dx * 100;
+            obj.y -= dy * 100;
+            // Sync body immediately so physics tick sees zero delta (no shaking)
+            if (obj.physicsBody === 'kinematic' && obj._physicsBody && window.Matter) {
+                const off  = obj._physicsBody._zenOffset || { x: 0, y: 0 };
+                const cosR = Math.cos(obj.rotation || 0);
+                const sinR = Math.sin(obj.rotation || 0);
+                window.Matter.Body.setPosition(obj._physicsBody, {
+                    x: obj.x + off.x * cosR - off.y * sinR,
+                    y: obj.y + off.x * sinR + off.y * cosR,
+                });
+            }
+        },
+        translate(dx, dy) {
+            obj.x += dx * 100;
+            obj.y -= dy * 100;
+            if (obj.physicsBody === 'kinematic' && obj._physicsBody && window.Matter) {
+                const off  = obj._physicsBody._zenOffset || { x: 0, y: 0 };
+                const cosR = Math.cos(obj.rotation || 0);
+                const sinR = Math.sin(obj.rotation || 0);
+                window.Matter.Body.setPosition(obj._physicsBody, {
+                    x: obj.x + off.x * cosR - off.y * sinR,
+                    y: obj.y + off.x * sinR + off.y * cosR,
+                });
+            }
+        },
+        moveTo(x, y) {
+            obj.x =  x * 100;
+            obj.y = -y * 100;
+            if (obj.physicsBody === 'kinematic' && obj._physicsBody && window.Matter) {
+                const off  = obj._physicsBody._zenOffset || { x: 0, y: 0 };
+                const cosR = Math.cos(obj.rotation || 0);
+                const sinR = Math.sin(obj.rotation || 0);
+                window.Matter.Body.setPosition(obj._physicsBody, {
+                    x: obj.x + off.x * cosR - off.y * sinR,
+                    y: obj.y + off.x * sinR + off.y * cosR,
+                });
+            }
+        },
         /** Rotate to face a world point */
         lookAt(tx, ty) {
             obj.rotation = -Math.atan2(-((-ty*100) - obj.y), (tx*100) - obj.x);
@@ -363,6 +435,10 @@ function _buildSandbox(obj, instRef) {
             const r = -obj.rotation;
             obj.x += Math.cos(r) * speed * 100;
             obj.y -= Math.sin(r) * speed * 100;
+            if (obj.physicsBody === 'kinematic' && obj._physicsBody && window.Matter) {
+                const off = obj._physicsBody._zenOffset || { x:0, y:0 };
+                window.Matter.Body.setPosition(obj._physicsBody, { x: obj.x + off.x, y: obj.y + off.y });
+            }
         },
         flipX() { if (obj.scale) obj.scale.x *= -1; },
         flipY() { if (obj.scale) obj.scale.y *= -1; },
@@ -528,20 +604,167 @@ function _buildSandbox(obj, instRef) {
         // ── CAMERA ───────────────────────────────────────────
         camera: _camera,
 
-        // ── SCENE VARIABLES (shared across all scripts this scene) ──
-        /**
-         * Scene variables — shared between ALL scripts in the current scene.
-         * Reset when switching scenes.
-         * Example: this.sceneVar.score = 10;  log(this.sceneVar.score);
-         */
+        // ── SCENE VARIABLES ──────────────────────────────────
+        /** Shared across all scripts in this scene. Resets on scene change. */
         get sceneVar() { return _sceneVars; },
 
-        // ── GLOBAL VARIABLES (persist across scenes) ─────────
+        // ── GLOBAL VARIABLES ─────────────────────────────────
         /**
-         * Global variables — persist even when switching scenes.
-         * Example: this.globalVar.totalCoins += 1;
+         * Shared across ALL scripts in ALL scenes. Persists until Play stops.
+         * Example:  globalVar.score = 0;   globalVar.score += 10;
+         * Any script can read/write the same values.
          */
         get globalVar() { return _globalVars; },
+
+        // ── SOUND ─────────────────────────────────────────────
+        /**
+         * Play a sound asset by name.
+         * soundPlay("Jump", { x:0, y:0, loop:false, range:400, volume:1.0 })
+         */
+        soundPlay(assetName, opts = {}) {
+            const asset = state.assets.find(a => a.label === assetName || a.name === assetName);
+            if (!asset) { _logConsole(`soundPlay: asset "${assetName}" not found`, '#facc15'); return; }
+            import('./engine.audio.js').then(m => {
+                m._playScriptSound(asset, {
+                    x:      (opts.x ?? obj.x / 100),
+                    y:      (opts.y ?? -obj.y / 100),
+                    loop:   opts.loop   ?? false,
+                    range:  opts.range  ?? 400,
+                    volume: opts.volume ?? 1.0,
+                    id:     assetName,
+                });
+            });
+        },
+        /**
+         * Stop a specific sound by name.
+         * soundStop("Jump")
+         */
+        soundStop(assetName) {
+            import('./engine.audio.js').then(m => m._stopScriptSound(assetName));
+        },
+        /** Stop all currently playing sounds */
+        soundStopAll() {
+            import('./engine.audio.js').then(m => m._stopAllScriptSounds());
+        },
+
+        // ── TIMERS ────────────────────────────────────────────
+        /**
+         * Wait a number of seconds then call a function.
+         * Works inside onUpdate — call once and it schedules itself.
+         * Example:  wait(2, () => { log("2 seconds passed!"); });
+         */
+        wait(seconds, fn) {
+            _scheduleTimer(seconds, fn);
+        },
+
+        // ── PHYSICS CONTROL FROM SCRIPT ───────────────────────
+        /**
+         * Change this object's physics body type at runtime.
+         * setPhysicsType("static") | "kinematic" | "dynamic" | "none"
+         */
+        setPhysicsType(type) {
+            obj.physicsBody = type;
+            // Rebuild the physics body at runtime if physics is running
+            if (state.isPlaying) {
+                import('./engine.physics.js').then(m => m.rebuildBodyForObject(obj));
+            }
+        },
+        /**
+         * Enable or disable collision detection for this object.
+         * setCollision(false) — object passes through everything (sensor).
+         */
+        setCollision(enabled) {
+            obj.physicsIsSensor = !enabled;
+            if (obj._physicsBody && window.Matter) {
+                obj._physicsBody.isSensor = !enabled;
+                if (obj._physicsBody.parts) {
+                    for (const part of obj._physicsBody.parts) part.isSensor = !enabled;
+                }
+            }
+        },
+        /**
+         * Make this object a sensor (detects overlaps but no physical response).
+         */
+        setSensor(v) {
+            obj.physicsIsSensor = !!v;
+            if (obj._physicsBody && window.Matter) {
+                obj._physicsBody.isSensor = !!v;
+            }
+        },
+        /**
+         * Set which collision category layer this object belongs to.
+         * setCollisionCategory(2)
+         */
+        setCollisionCategory(cat) {
+            obj.physicsCollisionCategory = cat;
+            if (obj._physicsBody && window.Matter) {
+                window.Matter.Body.set(obj._physicsBody, 'collisionFilter', {
+                    ...obj._physicsBody.collisionFilter,
+                    category: cat,
+                });
+            }
+        },
+        /**
+         * Set which categories this object collides with (bitmask).
+         * setCollisionMask(-1) = collide with everything (default)
+         * setCollisionMask(0)  = collide with nothing
+         */
+        setCollisionMask(mask) {
+            obj.physicsCollisionMask = mask;
+            if (obj._physicsBody && window.Matter) {
+                window.Matter.Body.set(obj._physicsBody, 'collisionFilter', {
+                    ...obj._physicsBody.collisionFilter,
+                    mask,
+                });
+            }
+        },
+
+        // ── SPRITE TINT ───────────────────────────────────────
+        /**
+         * Set this object's tint colour.
+         * tint("#ff0000") or tint(0xff0000)
+         * tint(null) or tint("#ffffff") to remove tint.
+         */
+        get tint() {
+            const t = obj.spriteGraphic?.tint;
+            return t !== undefined ? '#' + t.toString(16).padStart(6, '0') : '#ffffff';
+        },
+        set tint(v) {
+            const hex = typeof v === 'string'
+                ? parseInt(v.replace('#',''), 16)
+                : (v ?? 0xffffff);
+            obj._scriptTint = hex;
+            if (obj.spriteGraphic) obj.spriteGraphic.tint = hex;
+        },
+
+        // ── DISTANCE ─────────────────────────────────────────
+        /**
+         * Get the distance from this object to another position or object.
+         * distanceTo(other)         — proxy from find/findWithTag
+         * distanceTo(x, y)          — world coordinates
+         * distanceTo("player")      — tag name (finds first object with that tag)
+         */
+        distanceTo(targetOrX, y) {
+            let tx, ty;
+            if (typeof targetOrX === 'string') {
+                const found = _tagRegistry.get(targetOrX);
+                if (!found || !found.size) return Infinity;
+                const [first] = found;
+                tx = first.obj.x / 100;
+                ty = -first.obj.y / 100;
+            } else if (targetOrX && typeof targetOrX === 'object' && '_ref' in targetOrX) {
+                tx = targetOrX.x;
+                ty = targetOrX.y;
+            } else if (typeof targetOrX === 'number') {
+                tx = targetOrX;
+                ty = y ?? 0;
+            } else {
+                return Infinity;
+            }
+            const ox = obj.x / 100;
+            const oy = -obj.y / 100;
+            return Math.sqrt((tx - ox) ** 2 + (ty - oy) ** 2);
+        },
 
         // ── TIME ─────────────────────────────────────────────
         /** Total seconds since Play was pressed */
@@ -916,6 +1139,63 @@ var globalVar = api.globalVar;
 /** store — private to this script, reset on Play stop */
 var store = api.store;
 
+// ── Sound ─────────────────────────────────────────────────────
+/**
+ * Play a sound asset by name.
+ * soundPlay("Jump")
+ * soundPlay("BgMusic", { loop:true, volume:0.8, range:400 })
+ * soundPlay("Boom", { x:3, y:2, range:600 })   // at world position
+ */
+function soundPlay(name, opts)    { api.soundPlay(name, opts || {}); }
+/** Stop a specific sound by name */
+function soundStop(name)          { api.soundStop(name); }
+/** Stop all currently playing sounds */
+function soundStopAll()           { api.soundStopAll(); }
+
+// ── Timers ────────────────────────────────────────────────────
+/**
+ * Wait X seconds then run a function. Non-blocking.
+ * Example:  wait(2, () => { log("2 seconds!"); })
+ */
+function wait(seconds, fn)        { api.wait(seconds, fn); }
+
+// ── Physics control ───────────────────────────────────────────
+/**
+ * Change this object's physics body type.
+ * setPhysicsType("static") | "kinematic" | "dynamic" | "none"
+ */
+function setPhysicsType(type)     { api.setPhysicsType(type); }
+/**
+ * Enable or disable collision for this object.
+ * setCollision(false) — passes through everything
+ */
+function setCollision(enabled)    { api.setCollision(enabled); }
+/** Make this object a sensor (no physical response but fires collision events) */
+function setSensor(v)             { api.setSensor(v); }
+/** Set collision layer category */
+function setCollisionCategory(c)  { api.setCollisionCategory(c); }
+/** Set collision layer mask (which layers to collide with) */
+function setCollisionMask(m)      { api.setCollisionMask(m); }
+
+// ── Tint ──────────────────────────────────────────────────────
+/**
+ * Set this object's colour tint.
+ * setTint("#ff0000")      — red tint
+ * setTint("#ffffff")      — remove tint (white = no effect)
+ * setTint(0x00ff00)       — green tint (hex number)
+ */
+function setTint(v)               { api.tint = v; }
+function getTint()                { return api.tint; }
+
+// ── Distance ──────────────────────────────────────────────────
+/**
+ * Distance from this object to another.
+ * distanceTo("enemy")              — first object with tag "enemy"
+ * distanceTo(find("Boss"))         — a specific object
+ * distanceTo(3, 5)                 — world position x=3, y=5
+ */
+function distanceTo(targetOrX, y) { return api.distanceTo(targetOrX, y); }
+
 // ── Math helpers ──────────────────────────────────────────────
 var math    = api.math;
 var lerp    = math.lerp;
@@ -994,17 +1274,47 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
     }
 
     update(dt) {
-        // Auto-integrate velocity + gravity
         const vel  = this.api._vel;
         const grav = this.api._grav;
+        const obj  = this.obj;
 
-        // Apply gravity to velocity
+        // Apply manual gravity to velocity
         if (grav.x !== 0) vel.x += grav.x * dt;
         if (grav.y !== 0) vel.y += grav.y * dt;
 
-        // Integrate velocity into position
-        if (vel.x !== 0) this.obj.x +=  vel.x * dt * 100;
-        if (vel.y !== 0) this.obj.y -= vel.y * dt * 100;
+        const hasKinematicBody = obj.physicsBody === 'kinematic' && obj._physicsBody;
+        const hasDynamicBody   = obj.physicsBody === 'dynamic'   && obj._physicsBody;
+
+        if (hasKinematicBody) {
+            // ── Kinematic with physics body ────────────────────────────
+            // Write script velocity directly to the Matter body.
+            if (window.Matter && (vel.x !== 0 || vel.y !== 0)) {
+                window.Matter.Body.setVelocity(obj._physicsBody, {
+                    x:  vel.x * 60,   // Matter uses per-frame velocity (60fps base)
+                    y: -vel.y * 60,
+                });
+                // Signal to physics tick: velocity-driven this frame, don't override
+                obj._kinematicVelDriven = true;
+            } else {
+                obj._kinematicVelDriven = false;
+            }
+        } else if (hasDynamicBody) {
+            // ── Dynamic with physics body ──────────────────────────────
+            // Script vel/grav are additive forces on top of physics.
+            // Apply as impulses so they work alongside gravity/collisions.
+            if (window.Matter && (vel.x !== 0 || vel.y !== 0)) {
+                const mass = obj._physicsBody.mass || 1;
+                window.Matter.Body.applyForce(obj._physicsBody, obj._physicsBody.position, {
+                    x:  vel.x * mass * 0.016,
+                    y: -vel.y * mass * 0.016,
+                });
+            }
+        } else {
+            // ── No physics body — pure scripting movement ──────────────
+            // Integrate velocity directly into position (no physics conflicts).
+            if (vel.x !== 0) obj.x +=  vel.x * dt * 100;
+            if (vel.y !== 0) obj.y -= vel.y * dt * 100;
+        }
 
         if (this._onUpdate) {
             try { this._onUpdate(dt); }
@@ -1012,7 +1322,7 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
         }
 
         // Destroy queue
-        if (this.obj._markedForDestroy) _destroyObject(this.obj);
+        if (obj._markedForDestroy) _destroyObject(obj);
 
         // Clear per-frame input flags
         this._keysJustDown.clear();
@@ -1182,6 +1492,7 @@ export function startScripts() {
         _updateCamera(dt);
         _runOverlapChecks();
         _runCollisionStayChecks();
+        _tickTimers(dt);
 
         const snap = [..._instances];
         for (const i of snap) {
@@ -1200,6 +1511,8 @@ export function stopScripts() {
     _clearRegistries();
     _camera._followTarget = null;
     clearSceneVars();
+    clearGlobalVars();  // reset between play sessions
+    _clearTimers();
     if (_ticker && state.app) { state.app.ticker.remove(_ticker); _ticker = null; }
     window.removeEventListener('keydown',   _kd);
     window.removeEventListener('keyup',     _ku);
@@ -1366,6 +1679,26 @@ const COMPLETIONS = [
     { n:'log',               m:'🐛 debug',    v:'log(${1:value})' },
     { n:'warn',              m:'🐛 debug',    v:'warn(${1:value})' },
     { n:'error',             m:'🐛 debug',    v:'error(${1:value})' },
+    // Sound
+    { n:'soundPlay',         m:'🔊 sound',    v:"soundPlay('${1:assetName}')" },
+    { n:'soundPlay opts',    m:'🔊 sound',    v:"soundPlay('${1:name}', { loop:${2:false}, volume:${3:1.0}, range:${4:400} })" },
+    { n:'soundStop',         m:'🔊 sound',    v:"soundStop('${1:assetName}')" },
+    { n:'soundStopAll',      m:'🔊 sound',    v:'soundStopAll()' },
+    // Timer
+    { n:'wait',              m:'⏳ timer',    v:'wait(${1:seconds}, () => {\n  ${2:// code here}\n})' },
+    // Physics control
+    { n:'setPhysicsType',    m:'⚙ physics',   v:"setPhysicsType('${1:kinematic}')" },
+    { n:'setCollision',      m:'⚙ physics',   v:'setCollision(${1:true})' },
+    { n:'setSensor',         m:'⚙ physics',   v:'setSensor(${1:true})' },
+    { n:'setCollisionCategory',m:'⚙ physics', v:'setCollisionCategory(${1:1})' },
+    { n:'setCollisionMask',  m:'⚙ physics',   v:'setCollisionMask(${1:-1})' },
+    // Tint
+    { n:'setTint',           m:'🎨 tint',     v:"setTint('${1:#ffffff}')" },
+    { n:'getTint',           m:'🎨 tint',     v:'getTint()' },
+    // Distance
+    { n:'distanceTo',        m:'📐 distance', v:"distanceTo('${1:tag}')" },
+    { n:'distanceTo pos',    m:'📐 distance', v:'distanceTo(${1:x}, ${2:y})' },
+    { n:'distanceTo obj',    m:'📐 distance', v:'distanceTo(find("${1:label}"))' },
 ].map(c => ({ caption:c.n, value:c.v, meta:c.m, score:950 }));
 
 
@@ -1607,20 +1940,24 @@ function _sidebarHTML() {
         ['Events',         ['onStart(fn)', 'onUpdate(fn)', 'onStop(fn)', 'onCollisionEnter(fn)', 'onCollisionStay(fn)', 'onCollisionExit(fn)', 'onOverlapEnter(fn)', 'onOverlapExit(fn)', 'onMessage("msg",fn)', 'onMouseClick(fn)']],
         ['this.position',  ['getX() / setX(v)', 'getY() / setY(v)', 'moveTo(x, y)', 'move(dx, dy)', 'moveForward(speed)', 'lookAt(tx, ty)', 'flipX() / flipY()']],
         ['this.velocity',  ['velocityX / vx', 'velocityY / vy', 'setVelocity(vx,vy)', 'stopMovement()', 'bounceX() / bounceY()']],
-        ['this.gravity',   ['gravity(gx, gy)', '  0,-9.8 = fall down', '  0, 9.8 = float up']],
+        ['this.gravity',   ['gravity(gx, gy)', '  gravity(0,-9.8) = fall down', '  gravity(0, 9.8) = float up']],
         ['Rotation/Scale', ['getRotation()', 'setRotation(deg)', 'getScaleX/Y()', 'setScaleX/Y(v)']],
-        ['Display',        ['show() / hide()', 'setVisible(v)', 'getAlpha() / setAlpha(v)', 'fadeIn(t, dt)', 'fadeOut(t, dt)']],
+        ['Display',        ['show() / hide()', 'setVisible(v)', 'getAlpha() / setAlpha(v)', 'fadeIn(t, dt)', 'fadeOut(t, dt)', 'setTint("#ff0000")', 'getTint()']],
         ['Tag & Group',    ['setTag("name") / getTag()', 'setGroup("name") / getGroup()']],
         ['Messaging',      ['sendMessage(tag, msg, data)', 'broadcast(tag, msg)', 'broadcastGroup(grp, msg)', 'broadcastAll(msg)', 'onMessage("msg", fn)']],
         ['Find objects',   ['find("label")', 'findWithTag("tag")', 'findAllWithTag("tag")', 'findAllInGroup("grp")']],
         ['Overlap (AABB)', ['overlaps(other)', 'overlapsTag("tag")', 'overlapsAllWithTag("tag")', 'onOverlapEnter(fn)', 'onOverlapExit(fn)']],
+        ['Distance',       ['distanceTo("tag")', 'distanceTo(x, y)', 'distanceTo(find("label"))']],
         ['Destroy',        ['destroySelf()', 'destroy(other)']],
-        ['Scene',          ['gotoScene("Name")', 'currentScene()', 'currentSceneIndex()', 'sceneCount()', 'getSceneName(i)']],
+        ['Scene',          ['gotoScene("Name") / gotoScene(1)', 'currentScene()', 'currentSceneIndex()', 'sceneCount()', 'getSceneName(i)']],
         ['Camera',         ['cameraFollow(obj, smooth)', 'cameraUnfollow()', 'cameraMoveTo(x, y)', 'getCameraX/Y()', 'cameraShake(amp, dur)']],
         ['Input',          ['isKeyDown("w")', 'isKeyJustDown("Space")', 'isKeyJustUp("w")', 'axisH() → -1/0/1', 'axisV() → -1/0/1', 'mouseX() / mouseY()', 'mouseDown() / mouseJustDown()']],
         ['Animation',      ['playAnimation("name")', 'stopAnimation()', 'currentAnimation()']],
         ['Physics body',   ['physics.setVelocity(vx,vy)', 'physics.applyForce(fx,fy)', 'physics.stop()', 'physics.velX / velY']],
-        ['Shared vars',    ['sceneVar.myVar (scene-wide)', 'globalVar.myVar (across scenes)', 'store.set/get (private)']],
+        ['Physics control',['setPhysicsType("kinematic")', 'setCollision(true/false)', 'setSensor(true)', 'setCollisionCategory(n)', 'setCollisionMask(n)']],
+        ['Sound',          ['soundPlay("name")', "soundPlay('n', {loop,volume,range})", 'soundStop("name")', 'soundStopAll()']],
+        ['Timer',          ['wait(seconds, fn)']],
+        ['Shared vars',    ['sceneVar.myVar (scene-wide)', 'globalVar.myVar (all scenes)', 'store.set/get (private)']],
         ['Time',           ['getTime() → seconds']],
         ['Math',           ['lerp / clamp / dist', 'rand / randInt / sign', 'toRad / toDeg / mapRange', 'sin / cos / abs / sqrt', 'PI / floor / ceil / round', 'max / min']],
         ['Debug',          ['log(...)', 'warn(...)', 'error(...)']],
@@ -1642,104 +1979,118 @@ function _sidebarHTML() {
 function _defaultScript(name) {
     return `// ================================================================
 // Script: ${name}
-// Runs only in Play Mode — the editor is always safe.
+// Runs only during Play Mode. The editor is always safe.
 //
-// Quick reference:
-//   getX() / setX(v)     — this object's X position
-//   getY() / setY(v)     — this object's Y position
-//   velocityX / vx       — horizontal speed (units/sec, auto-applied)
-//   velocityY / vy       — vertical speed
-//   gravity(0, -9.8)     — apply gravity each frame
-//   setTag("player")     — tag this object for findWithTag()
-//   sendMessage(tag, msg, data)  — send a message to another object
-//   gotoScene("Level2")  — switch to a different scene
-//   cameraFollow(find("Player"))  — make camera follow an object
-//   overlapsTag("Coin")  — check overlap without needing physics
+// POSITION:      getX() / setX(v)      getY() / setY(v)
+// MOVEMENT:      move(dx, dy)          moveTo(x, y)        moveForward(speed)
+// VELOCITY:      velocityX = 5         velocityY = -3       (auto-applied)
+// GRAVITY:       gravity(0, -9.8)      (call once in onStart)
+// TAG:           setTag("player")      findWithTag("enemy")
+// MESSAGE:       sendMessage("tag","msg",data)   onMessage("msg",fn)
+// SCENE:         gotoScene("Level2")   currentScene()
+// CAMERA:        cameraFollow(find("Player"), 6)
+// SOUND:         soundPlay("Jump")     soundStop("Jump")
+// TIMER:         wait(2, () => { log("done!"); })
+// TINT:          setTint("#ff0000")    setTint("#ffffff")
+// DISTANCE:      distanceTo("enemy")   distanceTo(x, y)
+// OVERLAP:       overlapsTag("Coin")   onOverlapEnter(fn)
+// PHYSICS:       setPhysicsType("static")   setCollision(false)
+// GLOBAL VARS:   globalVar.score = 0   (shared across ALL scripts)
+// SCENE VARS:    sceneVar.lives = 3    (shared within this scene)
 // ================================================================
 
 
 onStart(() => {
   // Runs once when Play is pressed.
-  // Good place to set tags, groups, and initial values.
-
   setTag("${name.toLowerCase()}");
   log("${name} started!");
 
-  // Example: enable gravity for this object
-  // gravity(0, -9.8);
-
   // Example: make camera follow this object
   // cameraFollow(find("${name}"), 6);
+
+  // Example: enable gravity (negative Y = down in this engine)
+  // gravity(0, -9.8);
+
+  // Example: play background music on start
+  // soundPlay("Music", { loop: true, volume: 0.6 });
 });
 
 
 onUpdate((dt) => {
-  // Runs every frame. dt = seconds since the last frame.
-  // Always multiply movement by dt for smooth, frame-rate-independent motion.
+  // Runs every frame. dt = seconds since last frame.
+  // Always multiply movement values by dt for smooth motion.
 
-  // ── Move with keyboard ────────────────────────────────────────
+  // ── Keyboard movement ─────────────────────────────────────
   const speed = 5;
-  move(axisH() * speed * dt,   // A/D or Left/Right arrow
-       axisV() * speed * dt);  // W/S or Up/Down arrow
+  move(axisH() * speed * dt,   // A / D  or  ← →
+       axisV() * speed * dt);  // W / S  or  ↑ ↓
 
-  // ── Or use velocity (automatically applied every frame) ───────
-  // velocityX = axisH() * speed;
-  // velocityY = axisV() * speed;
+  // ── Velocity-based movement ───────────────────────────────
+  // velocityX = axisH() * speed;   // set each frame
+  // velocityY = axisV() * speed;   // (auto-applied, no need to call move)
 
-  // ── Check overlap (no physics body needed) ────────────────────
+  // ── Overlap check (no physics body needed) ────────────────
   // var coin = overlapsTag("coin");
   // if (coin) {
-  //   log("Collected: " + coin.name);
+  //   globalVar.score = (globalVar.score || 0) + 1;
+  //   log("Score: " + globalVar.score);
   //   destroy(coin);
-  //   sceneVar.score = (sceneVar.score || 0) + 1;
+  //   soundPlay("Pickup");
   // }
+
+  // ── Distance check ────────────────────────────────────────
+  // var d = distanceTo("enemy");
+  // if (d < 2) { warn("Enemy too close!"); }
 
 });
 
 
 onStop(() => {
   // Runs once when Play is stopped.
-  // Clean up anything you need to reset.
+  soundStopAll();
   log("${name} stopped.");
 });
 
 
 onCollisionEnter((other) => {
-  // Runs the MOMENT this object touches another (physics body required).
-  // other.name  — name of the object we hit
-  // other.x, other.y  — its position
-  if (other) {
-    log("Touched: " + other.name);
-  }
+  // Fires the MOMENT this object touches another (needs physics body).
+  if (!other) return;
+  log("Touched: " + other.name);
+
+  // Example: bounce off a wall
+  // if (other.tag === "wall") bounceX();
 });
 
 
 onCollisionStay((other) => {
-  // Runs EVERY FRAME while touching another object.
-  // Useful for continuous effects like sliding or damage over time.
+  // Fires every frame WHILE touching another object.
+  // Good for: floor detection, damage over time, etc.
 });
 
 
 onCollisionExit((other) => {
-  // Runs the MOMENT this object stops touching another.
-  if (other) {
-    log("Stopped touching: " + other.name);
-  }
+  // Fires the MOMENT contact ends.
 });
 
 
 onOverlapEnter((other) => {
   // Like onCollisionEnter but works WITHOUT a physics body (pure AABB).
-  // Great for trigger zones, pickups, checkpoints.
-  if (other) {
-    log("Overlapped: " + other.name);
-  }
+  // Perfect for: coins, checkpoints, trigger zones, doors.
+  if (!other) return;
+  log("Overlapped: " + other.name);
 });
 
 
 onMessage("takeDamage", (amount) => {
-  // Called when another script does:  sendMessage("${name.toLowerCase()}", "takeDamage", 10)
-  log("Took " + amount + " damage!");
+  // Called when: sendMessage("${name.toLowerCase()}", "takeDamage", 10)
+  warn("Took " + amount + " damage!");
+  // setTint("#ff0000");
+  // wait(0.2, () => setTint("#ffffff"));
+});
+
+
+onMessage("heal", (amount) => {
+  log("Healed by " + amount);
 });
 `;
 }

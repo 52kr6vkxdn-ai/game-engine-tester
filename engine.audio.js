@@ -428,3 +428,71 @@ async function _decodeDataURL(ctx, dataURL) {
     const ab  = await res.arrayBuffer();
     return ctx.decodeAudioData(ab);
 }
+
+// ── Script-driven sound playback ─────────────────────────────
+// Separate from scene audioSources — these are triggered by scripts.
+let _scriptNodes = [];  // { bufSrc, gainNode, id }
+
+export async function _playScriptSound(asset, opts = {}) {
+    if (!asset?.dataURL) return;
+    const ctx = _getCtx();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch(_){} }
+
+    // Stop existing sound with this id before replaying
+    if (opts.id) _stopScriptSound(opts.id);
+
+    try {
+        const buf    = await _decodeDataURL(ctx, asset.dataURL);
+        const src    = ctx.createBufferSource();
+        src.buffer   = buf;
+        src.loop     = opts.loop ?? false;
+
+        const gain   = ctx.createGain();
+        gain.gain.value = Math.max(0, Math.min(1, opts.volume ?? 1.0));
+
+        if (opts.range && opts.range > 0) {
+            // Positional sound
+            const panner = ctx.createPanner();
+            panner.panningModel  = 'HRTF';
+            panner.distanceModel = 'linear';
+            const rangeU = opts.range / PIXELS_PER_UNIT;
+            panner.refDistance   = Math.max(0.01, rangeU * 0.1);
+            panner.maxDistance   = rangeU;
+            panner.rolloffFactor = 1;
+            panner.setPosition(opts.x ?? 0, -(opts.y ?? 0), 0);
+            src.connect(gain);
+            gain.connect(panner);
+            panner.connect(ctx.destination);
+        } else {
+            // Non-positional
+            src.connect(gain);
+            gain.connect(ctx.destination);
+        }
+
+        src.start(0);
+        _scriptNodes.push({ bufSrc: src, gainNode: gain, id: opts.id ?? null });
+
+        src.onended = () => {
+            const idx = _scriptNodes.findIndex(n => n.bufSrc === src);
+            if (idx !== -1) _scriptNodes.splice(idx, 1);
+        };
+    } catch (e) {
+        console.warn('[Zengine Audio] script sound error:', e);
+    }
+}
+
+export function _stopScriptSound(id) {
+    const nodes = _scriptNodes.filter(n => n.id === id);
+    for (const n of nodes) {
+        try { n.bufSrc.stop(); } catch(_) {}
+    }
+    _scriptNodes = _scriptNodes.filter(n => n.id !== id);
+}
+
+export function _stopAllScriptSounds() {
+    for (const n of _scriptNodes) {
+        try { n.bufSrc.stop(); } catch(_) {}
+    }
+    _scriptNodes = [];
+}
