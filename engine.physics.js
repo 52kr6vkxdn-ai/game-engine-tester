@@ -399,39 +399,18 @@ export async function startPhysics() {
         const { Body: B } = window.Matter;
 
         // ── PRE-STEP: kinematic bodies ─────────────────────────────────
-        // Two ways scripts move kinematic bodies:
-        // 1. Position-based: move()/moveTo()/setX() — these sync obj.x/y AND body position immediately
-        //    so the delta here is ~0. We just ensure velocity is zero so body stays put.
-        // 2. Velocity-based: velocityX = 5 — ScriptInstance.update() called Body.setVelocity directly.
-        //    We must NOT override that velocity. We detect this via obj._kinematicVelDriven flag.
+        // Scripts own kinematic position. They integrate velocity into obj.x/y
+        // AND call Body.setPosition immediately. So by the time we reach here,
+        // body.position already matches obj.x/y. We just enforce zero velocity
+        // (so Matter doesn't try to integrate it again) and sync the angle.
+        // Collision response: after Engine.update, if Matter pushed the body
+        // back (collision), we read the corrected position back into obj.x/y
+        // in the POST-STEP below.
         for (const { obj, body, type } of _bodies) {
             if (type !== 'kinematic') continue;
-
-            const off  = body._zenOffset || { x: 0, y: 0 };
-            const cosR = Math.cos(obj.rotation || 0);
-            const sinR = Math.sin(obj.rotation || 0);
-            const targetX = obj.x + off.x * cosR - off.y * sinR;
-            const targetY = obj.y + off.x * sinR + off.y * cosR;
-
-            const dx = targetX - body.position.x;
-            const dy = targetY - body.position.y;
-
-            if (obj._kinematicVelDriven) {
-                // Script is using velocityX/Y — body velocity already set, don't override
-                obj._kinematicVelDriven = false; // reset flag each frame
-            } else {
-                // Position-based: drive velocity to match any remaining delta
-                const THRESHOLD = 0.5;
-                if (dtSec > 0 && (Math.abs(dx) > THRESHOLD || Math.abs(dy) > THRESHOLD)) {
-                    B.setVelocity(body, { x: dx / dtSec, y: dy / dtSec });
-                } else {
-                    // No movement — zero velocity so body doesn't drift
-                    B.setVelocity(body, { x: 0, y: 0 });
-                    B.setPosition(body, { x: targetX, y: targetY });
-                }
-            }
-            B.setAngle(body, obj.rotation || 0);
+            B.setVelocity(body, { x: 0, y: 0 });
             B.setAngularVelocity(body, 0);
+            B.setAngle(body, obj.rotation || 0);
         }
 
         // ── PRE-STEP: per-body gravity for dynamic bodies ──────────────

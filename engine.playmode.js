@@ -137,18 +137,20 @@ export function drawCameraBounds() {
 }
 
 function _positionCameraBounds(el) {
-    if (!state.sceneContainer) return;
-    const sc  = state.sceneContainer;
-    const gw  = getGameWidth();
-    const gh  = getGameHeight();
-    const tlx = sc.x + (-gw/2) * sc.scale.x;
-    const tly = sc.y + (-gh/2) * sc.scale.y;
-    const w   = gw * sc.scale.x;
-    const h   = gh * sc.scale.y;
-    el.style.left   = tlx + 'px';
-    el.style.top    = tly + 'px';
-    el.style.width  = w + 'px';
-    el.style.height = h + 'px';
+    if (!state.app) return;
+    const sc    = state.sceneContainer;
+    const scale = sc?.scale.x ?? 1;
+    const gw    = getGameWidth()  * scale;
+    const gh    = getGameHeight() * scale;
+    const sw    = state.app.renderer.width  / (state.app.renderer.resolution || 1);
+    const sh    = state.app.renderer.height / (state.app.renderer.resolution || 1);
+    // Camera viewport is always centered on the canvas
+    const x = (sw - gw) / 2;
+    const y = (sh - gh) / 2;
+    el.style.left   = x + 'px';
+    el.style.top    = y + 'px';
+    el.style.width  = gw + 'px';
+    el.style.height = gh + 'px';
 }
 
 export function updateCameraBoundsIfVisible() {
@@ -613,17 +615,21 @@ function _startCulling() {
 }
 
 function _updateSceneMask() {
-    if (!_sceneMask || !state.sceneContainer) return;
-    const sc = state.sceneContainer;
-    const gw = getGameWidth();
-    const gh = getGameHeight();
-    const x  = sc.x - (gw / 2) * sc.scale.x;
-    const y  = sc.y - (gh / 2) * sc.scale.y;
-    const w  = gw * sc.scale.x;
-    const h  = gh * sc.scale.y;
+    if (!_sceneMask || !state.app) return;
+    // The camera viewport is ALWAYS centered on the renderer screen.
+    // sc.x/sc.y moves the world, but the window into that world is fixed.
+    // The mask must cover the same rectangle regardless of where the camera is.
+    const sw    = state.app.renderer.width  / (state.app.renderer.resolution || 1);
+    const sh    = state.app.renderer.height / (state.app.renderer.resolution || 1);
+    const scale = state.sceneContainer?.scale.x ?? 1;
+    const gw    = getGameWidth()  * scale;
+    const gh    = getGameHeight() * scale;
+    // Camera viewport is centered on the canvas
+    const x = (sw - gw) / 2;
+    const y = (sh - gh) / 2;
     _sceneMask.clear();
     _sceneMask.beginFill(0xFFFFFF, 1);
-    _sceneMask.drawRect(x, y, w, h);
+    _sceneMask.drawRect(x, y, gw, gh);
     _sceneMask.endFill();
 }
 
