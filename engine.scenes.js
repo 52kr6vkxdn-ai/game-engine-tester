@@ -57,16 +57,9 @@ export function switchToScene(index) {
     _loadScene(index);
     _refreshSceneButton();
     _refreshSceneDropdown();
-
+    // Clear scene-scoped variables when the scene changes
     if (state.isPlaying) {
-        // Stop scripts for the outgoing scene, clear scene vars,
-        // then restart scripts for the objects in the new scene.
-        import('./engine.scripting.js').then(m => {
-            m.clearSceneVars();
-            m.stopScripts();
-            // Small delay to let _loadScene finish rebuilding objects
-            setTimeout(() => m.startScripts(), 80);
-        });
+        import('./engine.scripting.js').then(m => m.clearSceneVars());
     }
 }
 

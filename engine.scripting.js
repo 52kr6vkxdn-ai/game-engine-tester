@@ -109,19 +109,16 @@ function _makeScriptCard(script, isDefault) {
             ${isDefault ? '<div style="position:absolute;bottom:1px;left:0;right:0;text-align:center;font-size:7px;color:#3a7a3a;font-weight:700;">BUILT-IN</div>' : ''}
         </div>
         <div class="asset-name" title="${script.name}.js">${script.name.length > 11 ? script.name.slice(0,10)+'…' : script.name}</div>
-        <div class="script-del-btn" style="display:none;position:absolute;top:2px;right:2px;">
-            <button title="Delete" style="background:rgba(24,6,6,.92);border:1px solid #3a1a1a;color:#f87171;border-radius:3px;padding:1px 4px;font-size:10px;cursor:pointer;">✕</button>
-        </div>
+        ${!isDefault ? '<div class="script-del-btn" style="display:none;position:absolute;top:2px;right:2px;"><button style="background:rgba(24,6,6,.92);border:1px solid #3a1a1a;color:#f87171;border-radius:3px;padding:1px 4px;font-size:10px;cursor:pointer;">✕</button></div>' : ''}
     `;
-    item.addEventListener('mouseenter', () => item.querySelector('.script-del-btn').style.display = 'block');
-    item.addEventListener('mouseleave', () => item.querySelector('.script-del-btn').style.display = 'none');
-    item.querySelector('.script-del-btn button')?.addEventListener('click', e => {
-        e.stopPropagation();
-        const msg = script.isDefault
-            ? `Delete built-in script "${script.name}"? You can reload it by creating a new project or from the default scripts.`
-            : `Delete script "${script.name}"?`;
-        if (confirm(msg)) deleteScriptByName(script.name);
-    });
+    if (!isDefault) {
+        item.addEventListener('mouseenter', () => item.querySelector('.script-del-btn').style.display = 'block');
+        item.addEventListener('mouseleave', () => item.querySelector('.script-del-btn').style.display = 'none');
+        item.querySelector('.script-del-btn button')?.addEventListener('click', e => {
+            e.stopPropagation();
+            if (confirm(`Delete script "${script.name}"?`)) deleteScriptByName(script.name);
+        });
+    }
     item.addEventListener('click', () => openScriptEditor(null, script.name, script.code));
     return item;
 }
@@ -584,29 +581,16 @@ function _buildSandbox(obj, instRef) {
         // ── SCENE MANAGEMENT ─────────────────────────────────
         /**
          * Switch to a scene by name or index.
-         * This is the same as clicking a scene tab and pressing Play — it replaces
-         * the current scene with the target scene's saved objects and runs their scripts.
-         * Does NOT move any objects to the new scene — it just activates the scene.
-         * Example: gotoScene("Level2")  or  gotoScene(1)
+         * Example: this.gotoScene("Level2")  or  this.gotoScene(1)
          */
         gotoScene(nameOrIndex) {
-            let idx;
             if (typeof nameOrIndex === 'number') {
-                idx = nameOrIndex;
+                import('./engine.scenes.js').then(m => m.switchToScene(nameOrIndex));
             } else {
-                idx = state.scenes.findIndex(s => s.name === String(nameOrIndex));
-                if (idx === -1) {
-                    _logConsole(`gotoScene: scene "${nameOrIndex}" not found. Available: ${state.scenes.map(s=>s.name).join(', ')}`, '#f87171');
-                    return;
-                }
+                const idx = state.scenes.findIndex(s => s.name === String(nameOrIndex));
+                if (idx !== -1) import('./engine.scenes.js').then(m => m.switchToScene(idx));
+                else _logConsole(`gotoScene: scene "${nameOrIndex}" not found`, '#f87171');
             }
-            if (idx < 0 || idx >= state.scenes.length) {
-                _logConsole(`gotoScene: index ${idx} out of range (0–${state.scenes.length-1})`, '#f87171');
-                return;
-            }
-            if (idx === state.activeSceneIndex) return;
-            _logConsole(`🎬 Switching to scene: "${state.scenes[idx]?.name}"`, '#4ade80');
-            import('./engine.scenes.js').then(m => m.switchToScene(idx));
         },
         /** Get the name of the current scene */
         get currentScene() { return state.scenes[state.activeSceneIndex]?.name ?? ''; },
@@ -1279,26 +1263,14 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
             api._vel.x = out._initVX ?? 0;
             api._vel.y = out._initVY ?? 0;
         } catch (err) {
-            // Extract line number from error if available, adjusting for the prelude offset
-            const rawLine = err.stack ? (err.stack.match(/<anonymous>:(\d+)/) || [])[1] : null;
-            const prelLines = 220; // approximate number of prelude lines
-            const userLine  = rawLine ? Math.max(1, parseInt(rawLine) - prelLines) : null;
-            const lineInfo  = userLine ? ` (your script line ~${userLine})` : '';
-            _logConsole(`╔═ COMPILE ERROR in "${this.name}" on object "${this.obj.label}"`, '#f87171');
-            _logConsole(`║  ${err.message}${lineInfo}`, '#f87171');
-            _logConsole(`╚═ Open the script editor to fix it`, '#f87171');
-            import('./engine.console.js').then(m => m.recordPlayError?.());
+            _logConsole(`[Script "${this.name}" → "${this.obj.label}"] ✖ ${err.message}`, '#f87171');
         }
     }
 
     start() {
         if (!this._onStart) return;
         try { this._onStart(); }
-        catch (e) {
-            _logConsole(`╔═ RUNTIME ERROR in "${this.name}" → onStart (object: "${this.obj.label}")`, '#f87171');
-            _logConsole(`║  ${e.message}`, '#f87171');
-            _logConsole(`╚═ Check the script editor for mistakes`, '#f87171');
-        }
+        catch (e) { _logConsole(`[Script "${this.name}"] onStart: ${e.message}`, '#f87171'); }
     }
 
     update(dt) {
@@ -1315,27 +1287,17 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
 
         if (hasKinematicBody) {
             // ── Kinematic with physics body ────────────────────────────
-            // Integrate velocity directly into obj.x/y (same as no-physics),
-            // then IMMEDIATELY sync the body position so the physics tick
-            // sees zero delta and doesn't fight us.
-            // This is the only way to get smooth kinematic movement in Matter.js —
-            // Body.setVelocity() causes the engine to integrate it again and
-            // fight script-driven position, creating the shaking.
-            if (vel.x !== 0) obj.x +=  vel.x * dt * 100;
-            if (vel.y !== 0) obj.y -= vel.y * dt * 100;
-
-            if (vel.x !== 0 || vel.y !== 0) {
-                const off  = obj._physicsBody._zenOffset || { x: 0, y: 0 };
-                const cosR = Math.cos(obj.rotation || 0);
-                const sinR = Math.sin(obj.rotation || 0);
-                window.Matter.Body.setPosition(obj._physicsBody, {
-                    x: obj.x + off.x * cosR - off.y * sinR,
-                    y: obj.y + off.x * sinR + off.y * cosR,
+            // Write script velocity directly to the Matter body.
+            if (window.Matter && (vel.x !== 0 || vel.y !== 0)) {
+                window.Matter.Body.setVelocity(obj._physicsBody, {
+                    x:  vel.x * 60,   // Matter uses per-frame velocity (60fps base)
+                    y: -vel.y * 60,
                 });
-                // Keep velocity zeroed — we own the position, not Matter
-                window.Matter.Body.setVelocity(obj._physicsBody, { x: 0, y: 0 });
+                // Signal to physics tick: velocity-driven this frame, don't override
+                obj._kinematicVelDriven = true;
+            } else {
+                obj._kinematicVelDriven = false;
             }
-            obj._kinematicVelDriven = true; // tell physics tick: position is already synced
         } else if (hasDynamicBody) {
             // ── Dynamic with physics body ──────────────────────────────
             // Script vel/grav are additive forces on top of physics.
@@ -1356,7 +1318,7 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
 
         if (this._onUpdate) {
             try { this._onUpdate(dt); }
-            catch (e) { _logConsole(`⚠ "${this.name}" onUpdate error (${this.obj.label}): ${e.message}`, '#f87171'); }
+            catch (e) { _logConsole(`[Script "${this.name}"] onUpdate: ${e.message}`, '#f87171'); }
         }
 
         // Destroy queue
@@ -1372,7 +1334,7 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
     stop() {
         if (!this._onStop) return;
         try { this._onStop(); }
-        catch (e) { _logConsole(`⚠ "${this.name}" onStop error (${this.obj.label}): ${e.message}`, '#f87171'); }
+        catch (e) { _logConsole(`[Script "${this.name}"] onStop: ${e.message}`, '#f87171'); }
     }
 
     // ── Collision callbacks (physics — fired by engine.physics.js) ──
@@ -1382,7 +1344,7 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
         if (this._onCollisionEnter) {
             const proxy = _makeProxy(other);
             try { this._onCollisionEnter(proxy); }
-            catch (e) { _logConsole(`⚠ "${this.name}" onCollisionEnter error: ${e.message}`, '#f87171'); }
+            catch (e) { _logConsole(`[Script "${this.name}"] onCollisionEnter: ${e.message}`, '#f87171'); }
         }
     }
 
@@ -1390,7 +1352,7 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
         if (this._onCollisionStay) {
             const proxy = _makeProxy(other);
             try { this._onCollisionStay(proxy); }
-            catch (e) { _logConsole(`⚠ "${this.name}" onCollisionStay error: ${e.message}`, '#f87171'); }
+            catch (e) { _logConsole(`[Script "${this.name}"] onCollisionStay: ${e.message}`, '#f87171'); }
         }
     }
 
@@ -1399,7 +1361,7 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
         if (this._onCollisionExit) {
             const proxy = _makeProxy(other);
             try { this._onCollisionExit(proxy); }
-            catch (e) { _logConsole(`⚠ "${this.name}" onCollisionExit error: ${e.message}`, '#f87171'); }
+            catch (e) { _logConsole(`[Script "${this.name}"] onCollisionExit: ${e.message}`, '#f87171'); }
         }
     }
 
@@ -1409,7 +1371,7 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
         if (this._onOverlapEnter) {
             const proxy = _makeProxy(other);
             try { this._onOverlapEnter(proxy); }
-            catch (e) { _logConsole(`⚠ "${this.name}" onOverlapEnter error: ${e.message}`, '#f87171'); }
+            catch (e) { _logConsole(`[Script "${this.name}"] onOverlapEnter: ${e.message}`, '#f87171'); }
         }
     }
 
@@ -1418,7 +1380,7 @@ __out._initVY            = typeof velocityY !== 'undefined' ? velocityY : 0;
         if (this._onOverlapExit) {
             const proxy = _makeProxy(other);
             try { this._onOverlapExit(proxy); }
-            catch (e) { _logConsole(`⚠ "${this.name}" onOverlapExit error: ${e.message}`, '#f87171'); }
+            catch (e) { _logConsole(`[Script "${this.name}"] onOverlapExit: ${e.message}`, '#f87171'); }
         }
     }
 
@@ -1494,30 +1456,21 @@ export function startScripts() {
     _clearRegistries();
     _camera._followTarget = null;
 
-    const scripted = state.gameObjects.filter(o => o.scriptName);
-    if (scripted.length === 0) return;
-
-    _logConsole(`── Scripting: loading ${scripted.length} script${scripted.length!==1?'s':''}…`, '#4ade80');
-
     let count = 0;
-    for (const obj of scripted) {
+    for (const obj of state.gameObjects) {
+        if (!obj.scriptName) continue;
         const rec = getScript(obj.scriptName);
         if (!rec) {
-            _logConsole(`⚠ Script not found: "${obj.scriptName}" (on object "${obj.label}")`, '#facc15');
-            _logConsole(`  → Check Scripts folder or re-save the script`, '#facc15');
+            _logConsole(`[Scripting] Script "${obj.scriptName}" not found for "${obj.label}"`, '#facc15');
             continue;
         }
-        _logConsole(`  ✓ "${obj.scriptName}" → "${obj.label}"`, '#4ade80');
         const inst = new ScriptInstance(obj, obj.scriptName, rec.code);
         _instances.push(inst);
         _registerInstance(inst);
         count++;
     }
 
-    if (count === 0) {
-        _logConsole('  No scripts loaded.', '#f87171');
-        return;
-    }
+    if (count === 0) return;
 
     // Fire onStart for all instances after all are registered
     // (so messaging and findWithTag work in onStart)
